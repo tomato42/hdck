@@ -26,6 +26,7 @@
  * any later version.
  */
 
+#define _XOPEN_SOURCE 500
 #define _GNU_SOURCE 1
 #define _FILE_OFFSET_BITS 64
 #include <errno.h>
@@ -44,6 +45,7 @@
 #include <getopt.h>
 #include <math.h>
 #include <fenv.h>
+#include <string.h>
 #include "ioprio.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 
@@ -217,6 +219,7 @@ get_file_size(int dev_fd)
 {
   struct stat file_stat;
   char* dev_stat_path;
+  off_t filesize;
   if (fstat(dev_fd, &file_stat) == -1)
     err(1, "fstat");
   if (S_ISREG(file_stat.st_mode))
@@ -239,8 +242,11 @@ get_file_size(int dev_fd)
       printf("%s: %s: File is neither device file nor regular file", __FILE__, "main");
       exit(EXIT_FAILURE);
     }
+  return filesize;
 }
 
+
+// readlink wrapper
 char *
 readlink_malloc (char *filename)
 {
@@ -254,13 +260,15 @@ readlink_malloc (char *filename)
 
       int nchars = readlink (filename, buffer, size);
       if (nchars < size)
-        if (nchars < 0)
-          err(1, "readlink")
-        else
-          {
-            buffer[nchars]='\0';
-            return buffer;
-          }
+        {
+          if (nchars < 0)
+            err(1, "readlink");
+          else
+            {
+              buffer[nchars]='\0';
+              return buffer;
+            }
+        }
       free (buffer);
       size *= 2;
     }
@@ -288,13 +296,11 @@ read_link(char* link)
         {
           buf[ret]='\0';
           return buf;
+        }
       else
         {
           free(buf);
           bufsize*=2;
-          buf = malloc(bufsize);
-          if (buf == NULL)
-            err(1, "malloc");
         }
     }
 }
@@ -318,29 +324,38 @@ get_file_stat_sys_name(char* filename)
   if(stat(filename, &file_stat) == -1)
     err(1, "stat");
 
-  if (S_ISLNK(file_stat.st_mod))
+  if (S_ISLNK(file_stat.st_mode))
     {
       err(1, "circular reference");
     }
 
-  if (!S_ISBLK(file_stat.st_mod))
+  if (!S_ISBLK(file_stat.st_mode))
     {
       return NULL;
     }
 
   name = strrchr(filename, '/');
+  name++;
+
   
   if (verbosity > 2)
     {
       printf("device name %s\n", name);
     }
   
-  stat_sys_name = malloc(strlen(name) + 12);
+  stat_sys_name = malloc(strlen(name) + 17);
   if (stat_sys_name == NULL)
     err(1, "malloc");
 
+  stat_sys_name[0]='\0';
   strcat(stat_sys_name, "/sys/block/");
-  srtcat(stat_sys_name, name);
+  strcat(stat_sys_name, name);
+  strcat(stat_sys_name, "/stat");
+
+  if (verbosity > 2)
+    {
+      printf("stat device to open %s\n", stat_sys_name);
+    }
 
   // check if file exists
   if(stat(stat_sys_name, &file_stat) == -1)
@@ -360,19 +375,20 @@ get_file_stat_sys_name(char* filename)
 }
 
 int
-get_read_writes(char* filepath, long long* reads, long long* writes)
+get_read_writes(char* filepath, long long* reads, long long* read_sec, long long* writes)
 {
   int fd;
-  char[1024] buf;
-  int read;
+  char buf[4096];
+  int read_bytes;
   fd = open(filepath, O_RDONLY);
   if (fd < 0)
     {
       err(1, "open");
     }
-  read = read(fd,buf, 1024);
-  if (read < 0)
-    err(1, "read");
+  read_bytes = read(fd,buf, 4096);
+  if (read_bytes < 0)
+    err(1, "get_read_writes: read");
+  buf[read_bytes] = '\0';
   // Field 1 -- # of reads issued
   // Field 2 -- # of reads merged 
   // Field 3 -- # of sectors read
@@ -384,8 +400,10 @@ get_read_writes(char* filepath, long long* reads, long long* writes)
   // Field 9 -- # of I/Os currently in progress
   // Field 10 -- # of milliseconds spent doing I/Os
   // Field 11 -- weighted # of milliseconds spent doing I/Os
-  read = sscanf(buf, "%lli %lli* %lli* %lli* %lli %lli* %lli* %lli* %lli* %lli* %lli*", reads, writes);
-  if (read != 2)
+  long long tmp=0;
+  read_bytes = sscanf(buf, "%lli %lli %lli %lli %lli %lli* %lli* %lli* %lli* %lli* %lli*", reads, &tmp, read_sec, &tmp, &tmp, writes);
+  close(fd);
+  if (read_bytes != 2)
     return 1;
   return 0;
 }
@@ -400,6 +418,7 @@ main(int argc, char **argv)
   int nodirect = 0; ///< don't use O_DIRECT access
   int noaffinity = 0; ///< don't set CPU affinity
   int nortio = 0; ///< don't change process scheduling to RT
+  char* dev_stat_path; ///< path to the `stat' file for the corresponding hardware device
   int sector_times = 0;
   enum {
       PRINT_TIMES = 1,
@@ -515,7 +534,9 @@ main(int argc, char **argv)
 
   int dev_fd = 0;
   char *ibuf;
+  char *ibuf_free;
   off_t nread;
+  off_t number_of_blocks;
 
   // make the process real-time
   make_real_time();
@@ -584,17 +605,19 @@ main(int argc, char **argv)
   dev_stat_path = get_file_stat_sys_name(filename);
 
   fesetround(2); // round UP
-  block_info = calloc(lrintl(filesize*1.0l/512/sectors), 
+  number_of_blocks = lrintl(filesize*1.0l/512/sectors);
+  block_info = calloc(number_of_blocks, 
       sizeof(struct block_info_t));
   if (block_info == NULL)
     {
       printf("Allocation error, tried to allocate %li bytes:\n", 
-          lrintl(filesize*1.0l/512/sectors)* sizeof(struct block_info_t));
+          number_of_blocks* sizeof(struct block_info_t));
       err(1, "calloc");
     }
 
   // get memory alligned pointer (needed for O_DIRECT access)
   ibuf = malloc(sectors*512+pagesize);
+  ibuf_free = ibuf;
   ibuf = ptr_align(ibuf, pagesize);
 
   fsync(dev_fd);
@@ -621,17 +644,35 @@ main(int argc, char **argv)
     slow = 0,
     vslow = 0,
     vvslow = 0;  
-  long long read_s, write_s, read_e, write_e;
+  long long read_s=0, write_s=0, read_e=1, write_e=0, read_sec_s=0, read_sec_e=0;
+  int next_is_valid=1;
+
+  // position the disk head
+  lseek(dev_fd, (off_t)0, SEEK_SET);
+  read(dev_fd, ibuf, 1);
+  lseek(dev_fd, (off_t)0, SEEK_SET);
+
+  clock_gettime(TIMER_TYPE, &time2);
   clock_gettime(TIMER_TYPE, &times);
+  if (dev_stat_path != NULL)
+    get_read_writes(dev_stat_path, &read_e, &read_sec_e, &write_e);
   while (1)
     {
-      if (dev_stat_path != NULL)
-        get_read_writes(dev_stat_path, &read_s, &write_s);
-      clock_gettime(TIMER_TYPE, &time1);
+      read_s = read_e;
+      write_s = write_e;
+      read_sec_s = read_sec_e;
+      //if (dev_stat_path != NULL)
+      //  get_read_writes(dev_stat_path, &read_s, &read_sec_s, &write_s);
+      time1.tv_sec=time2.tv_sec;
+      time1.tv_nsec=time2.tv_nsec;
+
+      //clock_gettime(TIMER_TYPE, &time1);
       nread = read(dev_fd, ibuf, sectors*512);
       clock_gettime(TIMER_TYPE, &time2);
+
       if (dev_stat_path != NULL)
-        get_read_writes(dev_stat_path, &read_e, &write_e);
+        get_read_writes(dev_stat_path, &read_e, &read_sec_e, &write_e);
+
       if (nread < 0) // on error
         {
           if (errno != EIO)
@@ -651,7 +692,7 @@ main(int argc, char **argv)
             }
         }
       // when the read was incomplete or interrupted
-      else if (nread != sectors*512 || read_e-read_s-1 != 0 || write_e != write_s)
+      else if (nread != sectors*512 || ( read_e-read_s != 1 && nodirect == 0) || (read_e-read_s > 4 && nodirect == 1) || write_e != write_s)
         {
           diff_time(&res, time1, time2);
           block_info[blocks].valid = 0;
@@ -663,45 +704,24 @@ main(int argc, char **argv)
                   nread = -1; // exit loop, end of device
                 }
             }
+          // invalidate next read block (to ignore seeking)
+          next_is_valid = 0;
         }
       else
         {
           diff_time(&res, time1, time2);
-          block_info[blocks].valid = 1;
+          block_info[blocks].valid = next_is_valid;
           block_info[blocks].sumtime = res;
           sqr_time(&res, res);
           block_info[blocks].sumsqtime = res;
-              if (lseek(dev_fd, (off_t)512*sectors, SEEK_CUR) < 0)
-                {
-                  nread = -1; // exit loop, end of device
-                }
-            }
-        }
-      // when the read was incomplete or interrupted
-      else if (nread != sectors*512 || read_e-read_s-1 != 0 || write_e != write_s)
-        {
-          diff_time(&res, time1, time2);
-          block_info[blocks].valid = 0;
-          if (nread != sectors*512)
+          if (lseek(dev_fd, (off_t)512*sectors, SEEK_CUR) < 0)
             {
-              // seek to start of next block
-              if (lseek(dev_fd, (off_t)512*sectors-nread, SEEK_CUR) < 0)
-                {
-                  nread = -1; // exit loop, end of device
-                }
+              nread = -1; // exit loop, end of device
             }
-        }
-      else
-        {
+            
+          next_is_valid = 1;
           diff_time(&res, time1, time2);
-          block_info[blocks].valid = 1;
-          block_info[blocks].sumtime = res;
-          sqr_time(&res, res);
-          block_info[blocks].sumsqtime = res;
-          diff_time(&res, time1, time2);
-          block_info[blocks].samples++;
         }
-
 
       if (res.tv_nsec < 2000000 && res.tv_sec == 0) // very very fast read
         {
@@ -740,7 +760,7 @@ main(int argc, char **argv)
           //fprintf(stderr, "%lli\n", blocks * sectors * 1ll);
         }
       if (sector_times == PRINT_TIMES)
-        printf("%li\n",res.tv_nsec/1000+res.tv_sec*1000000); 
+        printf("%li r:%lli rs: %lli w:%lli\n",res.tv_nsec/1000+res.tv_sec*1000000, read_s, read_sec_s, write_s); 
 //      fsync(0);
       blocks++;
       sum_time(&sumtime, &res);
@@ -796,5 +816,16 @@ main(int argc, char **argv)
   fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
       "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
       errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
-  return 1;
+  long long sum_invalid=0;
+  for (int i=0; i< blocks; i++)
+    {
+      if (block_info[i].valid == 0)
+        sum_invalid++;
+    }
+  fprintf(stderr, "Number of invalid measures because of interrupted reads: %lli\n", sum_invalid);
+
+  free(dev_stat_path);
+  free(block_info);
+  free(ibuf_free);
+  return 0;
 }
