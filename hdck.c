@@ -49,12 +49,23 @@
 #include "ioprio.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 
-int
-pagesize = 4096;
-int
-sectors = 256;
-int
-verbosity = 0;
+int pagesize = 4096;
+int sectors = 256;
+int verbosity = 0;
+
+int exclusive = 0; ///< use exclusive file access (O_EXCL)
+int nodirect = 0; ///< don't use O_DIRECT access
+int noaffinity = 0; ///< don't set CPU affinity
+int nortio = 0; ///< don't change process scheduling to RT
+
+/// minimal number of reads for a sector to be qualified as valid
+long long min_reads = 0; 
+/// maximal number of re-read tries before the algorith gives up
+long long max_reads = 0; 
+/// maximal standard deviation accepted for a block
+double max_std_dev = 0;
+
+size_t disk_cache_size = 32;
 
 /// information about a single block (256 sectors by default)
 struct block_info_t {
@@ -62,6 +73,12 @@ struct block_info_t {
     struct timespec sumsqtime; ///< sum of all squared read times
     int samples; ///< number of samples taken
     int valid; ///< 0 if data is invalid (because read was interrupted)
+};
+
+/// list of sectors to read
+struct block_list_t {
+    off_t off;
+    off_t len;
 };
 
 /** Print usage information
@@ -76,6 +93,7 @@ usage()
   printf("-x, --exclusive     use exclusive access\n");
   printf("                    (runs faster, but all partitions must be"
                                                               " unmounted)\n");
+  printf("-o, --outfile       output file for the detailed statistics \n");
   printf("--nodirect          don't use O_DIRECT\n");
   printf("--noflush           don't flush system buffers before reading\n");
   printf("--nosync            don't use O_SYNC\n");
@@ -85,17 +103,22 @@ usage()
                                                        " group of sectors\n");
   printf("--sector-times      print time it takes to read each group of"
                                                         " sectors (in µs)\n");
+  printf("--min-reads         minimal number of valid reads for a sector\n");
+  printf("--max-reads         maximal number of re-reads for a sector\n");
+  printf("--max-std-deviation maximal stdandard deviation for a sector to be "
+                                                        "considered valid\n");
   printf("--max-sectors NUM   read at most NUM sectors\n");
+  printf("--disk-cache NUM    size of the on-board disk cache (32MiB default)\n");
   printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
   printf("-h, -?              print this message\n");
   printf("\n");
   printf("This program can be run on both files and devices, though running it on top of\n");
   printf("a file is quite pointless. In most cases default settings should be OK. Things to\n");
-  printf("check are --nodirect and --noflush, sometimes it works better without them.\n");
+  printf("check are --nodirect and --noflush.\n");
   printf("When using -x, the program uses different algorithm that trusts the times more\n");
   printf("and as a result, should achive minimum confidence in less time (by not using re-\n");
-  printf("-reads) (God, I suck at English, rewrite it you moron :/)\n");
+  printf("-reads, much)\n");
 }
 
 /**Return PTR, aligned upward to the next multiple of ALIGNMENT.
@@ -438,16 +461,244 @@ get_read_writes(char* filepath, long long* reads, long long* read_sec, long long
   return 0;
 }
 
+struct block_info_t*
+read_blocks(int fd, char* stat_path, off_t offset, off_t len)
+{
+  struct timespec time_start; ///< start of read
+  struct timespec time_end; ///< end of read
+  struct timespec res; ///< temporary result
+  long long read_start, read_sectors_s, write_start,
+            read_end, read_sectors_e, write_end;
+  struct block_info_t* block_info;
+  char* buffer;
+  char* buffer_free;
+  off_t nread;
+  off_t no_blocks = 0;
+
+  block_info = calloc(sizeof(struct block_info_t), len);
+  if (block_info == NULL)
+    err(1, "read_blocks");
+
+  buffer = malloc(sectors*512+pagesize);
+  if (buffer == NULL)
+    err(1, "read_blocks");
+  buffer_free = buffer;
+  buffer = ptr_align(buffer, pagesize);
+
+  if (stat_path != NULL)
+    get_read_writes(stat_path, &read_start, &read_sectors_s, &write_start);
+
+  off_t disk_cache = disk_cache_size * 1024 * 1024 /sectors / 512;
+
+  // read additional blocks before the main data to exclude seek time and disk cache 
+  if(lseek(fd, ((offset-disk_cache)*sectors*512>=0)?(offset-disk_cache)*sectors*512:0, SEEK_SET) < 0)
+    goto interrupted;
+
+  for (int i=0; i < disk_cache; i++)
+    {
+      nread = read(fd, buffer, sectors*512);
+
+      if (nread != sectors*512)
+        goto interrupted;
+    }
+
+  if (offset-1 <= 0)
+    if ( lseek(fd, ((offset-1)*sectors*512>=0)?(offset-1)*sectors*512:0, SEEK_SET) < 0)
+      goto interrupted;
+
+  nread = read(fd, buffer, sectors*512);
+  if (nread != sectors*512)
+    goto interrupted;
+
+  if (offset == 0)
+    if( lseek(fd, (off_t) 0, SEEK_SET) < 0)
+      goto interrupted;
+
+  clock_gettime(TIMER_TYPE, &time_end);
+
+  while (no_blocks < len)
+    {
+      time_start.tv_sec = time_end.tv_sec;
+      time_start.tv_nsec = time_end.tv_nsec;
+
+      nread = read(fd, buffer, sectors*512);
+
+      clock_gettime(TIMER_TYPE, &time_end);
+
+      if (nread < 0)
+        {
+          if (errno != EIO)
+            err(1, "read_blocks");
+
+          write(2, "E", 1);
+
+          // omit block
+          if (lseek(fd, (off_t)512*sectors*(no_blocks+1 + offset), SEEK_SET) < 0)
+            goto interrupted;
+
+        }
+      else if (nread != sectors*512)
+        goto interrupted;
+
+      block_info[no_blocks].valid = 1;
+      diff_time(&res, time_start, time_end);
+      sum_time(&(block_info[no_blocks].sumtime), &res);
+      sqr_time(&res, res);
+      sum_time(&(block_info[no_blocks].sumsqtime), &res);
+      block_info[no_blocks].samples = 1;    
+
+      no_blocks++;
+    }
+
+  // read additional two blocks to exclude the probability that there were 
+  // unfinished reads in the mean time while the main was run
+  nread = read(fd, buffer, sectors*512);
+  nread = read(fd, buffer, sectors*512);
+
+  if (stat_path != NULL)
+    get_read_writes(stat_path, &read_end, &read_sectors_e, &write_end);
+
+  if ((read_end-read_start != disk_cache + 1 + 2 + len && nodirect == 0 && stat_path != NULL) || 
+      (read_end-read_start > 4 * (disk_cache + 1 + 2 + len) && nodirect == 1 && stat_path != NULL))
+    goto interrupted;
+
+  free(buffer_free);
+  return(block_info);
+
+interrupted:
+  free(buffer_free);
+  free(block_info);
+  return NULL;
+}
+
+/**
+ * @param block_info block statistics
+ * @param block_info_len block_info length
+ * @param min_std_dev minimal standard deviation for a block to be cosidered 
+ * uncertain
+ * @param min_reads minimal number of reads for a block to be considered
+ * checked
+ */
+struct block_list_t*
+find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
+    float min_std_dev, int min_reads)
+{
+  struct block_list_t* block_list;
+  struct block_list_t* ret;
+  size_t uncertain = 0;
+  size_t ret_len = 0;
+  struct timespec res;
+
+  off_t cache_blocks = disk_cache_size * 1024 * 1024 / sectors / 512;
+
+  block_list = calloc(sizeof(struct block_list_t), block_info_len);
+  if (block_list == NULL)
+    err(1, "find_uncertain_blocks");
+
+  // find uncertain blocks
+  for (size_t block_no=0; block_no < block_info_len; block_no++)
+    {
+      sqrt_time(&res, block_info[block_no].sumsqtime);
+      div_time(&res, res, block_info[block_no].samples);
+
+      if (block_info[block_no].valid == 0 || 
+          block_info[block_no].samples < min_reads ||
+          res.tv_sec * 1.0 + res.tv_nsec * 1.0 / 1E9 > min_std_dev)
+        {
+          block_list[uncertain].off = block_no;
+          block_list[uncertain].len = 1;
+          uncertain++;
+        }
+    }
+
+  if (uncertain == 0)
+    {
+      free(block_list);
+      return NULL;
+    }
+
+  ret = calloc(sizeof(struct block_list_t), uncertain+1);
+  if (ret == NULL)
+    err(1, "find_uncertain_blocks");
+
+  // compact the list
+  ret[0].off = block_list[0].off;
+  ret[0].len = block_list[0].len;
+  ret_len = 1;
+  for (size_t i=1; i< uncertain; i++)
+    {
+     /* if (block_list[i].off == ret[ret_len-1].off + ret[ret_len-1].len)
+        {
+          ret[ret_len-1].len++;
+          continue;
+        }
+
+      if (block_list[i].off == ret[ret_len-1].off + ret[ret_len-1].len + 1)
+        {
+          ret[ret_len-1].len+=2;
+          continue;
+        }*/
+      if (block_list[i].off <= ret[ret_len-1].off + ret[ret_len-1].len)
+        continue;
+
+      if (block_list[i].off <= ret[ret_len-1].off + ret[ret_len-1].len + 10
+         && ret[ret_len-1].len < 10)
+        {
+          ret[ret_len-1].len += block_list[i].off - (ret[ret_len-1].off + ret[ret_len-1].len);
+          if (ret[ret_len-1].len + ret[ret_len-1].off >= block_info_len)
+            ret[ret_len-1].len = block_info_len - ret[ret_len-1].off;
+          continue;
+        }
+
+      ret[ret_len].off = block_list[i].off;
+      ret[ret_len].len = block_list[i].len;
+      ret_len++;
+    }
+
+  free(block_list);
+
+  return ret;
+}
+
+void
+write_to_file(char *file, struct block_info_t* block_info, size_t len)
+{
+  FILE* handle;
+  struct timespec res;
+  struct timespec avg;
+  struct timespec dev;
+
+  handle = fopen(file, "w+");
+  if (handle == NULL)
+    err(1, "write_to_file");
+
+  fprintf(handle, "# sector_number, avg, std_dev, tries\n");
+
+  for(size_t i=0; i< len; i++)
+    {
+      div_time(&avg, block_info[i].sumtime, block_info[i].samples);
+      sqrt_time(&res, block_info[i].sumsqtime);
+      div_time(&dev, res, block_info[i].samples);
+
+      fprintf(handle, "%i %li.%li %li.%li %i\n",
+          i,
+          avg.tv_sec,
+          avg.tv_nsec,
+          dev.tv_sec,
+          dev.tv_nsec,
+          block_info[i].samples);
+    }
+
+  fclose(handle);
+}
+
 int
 main(int argc, char **argv)
 {
   int c;
   char* filename = NULL;
-  int exclusive = 0; ///< use exclusive file access (O_EXCL)
-  int nodirect = 0; ///< don't use O_DIRECT access
-  int noaffinity = 0; ///< don't set CPU affinity
-  int nortio = 0; ///< don't change process scheduling to RT
   char* dev_stat_path; ///< path to the `stat' file for the corresponding hardware device
+  char* output = NULL; ///< output file name
   int sector_times = 0;
   enum {
       PRINT_TIMES = 1,
@@ -480,10 +731,15 @@ main(int argc, char **argv)
         {"noverbose", 0, 0, 0}, // 9
         {"noflush", 0, &noflush, 1}, // 10
         {"max-sectors", 1, 0, 0}, // 11
+        {"outfile", 1, 0, 'o'}, // 12
+        {"min-reads", 1, 0, 0}, // 13
+        {"max-std-deviation", 1, 0, 0}, // 14
+        {"max-reads", 1, 0, 0}, // 15
+        {"disk-cache", 1, 0, 0}, // 16
         {0, 0, 0, 0}
     };
 
-    c = getopt_long(argc, argv, "f:xhv?",
+    c = getopt_long(argc, argv, "f:xhvo:?",
              long_options, &option_index);
     if (c == -1)
       break;
@@ -507,6 +763,26 @@ main(int argc, char **argv)
             max_sectors = atoll(optarg);
             break;
           }
+        if (option_index == 13)
+          {
+            min_reads = atoll(optarg);
+            break;
+          }
+        if (option_index == 14)
+          {
+            max_std_dev = atof(optarg);
+            break;
+          }
+        if (option_index == 15)
+          {
+            max_reads = atoll(optarg);
+            break;
+          }
+        if (option_index == 16)
+          {
+            disk_cache_size = atoll(optarg);
+            break;
+          }
         break;
 
     case 'v':
@@ -522,6 +798,11 @@ main(int argc, char **argv)
     case 'f':
         filename = optarg;
         if (verbosity > 5) printf("option f with value '%s'\n", optarg);
+        break;
+
+    case 'o':
+        output = optarg;
+        if (verbosity > 5) printf("option o with value '%s'\n", optarg);
         break;
 
     case 'h':
@@ -551,6 +832,25 @@ main(int argc, char **argv)
       printf("Missing -f parameter!\n");
       usage();
       exit(EXIT_FAILURE);
+    }
+
+  if (exclusive)
+    {
+      if (min_reads == 0)
+        min_reads = 1;
+      if (max_reads == 0)
+        max_reads = 5;
+      if (max_std_dev == 0)
+        max_std_dev = 5;
+    }
+  else
+    {
+      if (min_reads == 0)
+        min_reads = 3;
+      if (max_reads == 0)
+        max_reads = 10;
+      if (max_std_dev == 0)
+        max_std_dev = 2;
     }
 
   struct timespec time1, time2, /**< time it takes to read single block */
@@ -679,7 +979,7 @@ main(int argc, char **argv)
     vvslow = 0;  
   long long read_s=0, write_s=0, read_e=1, write_e=0, read_sec_s=0, read_sec_e=0;
   int next_is_valid=1;
-  int loop=0, loops=3;
+  int loop=0;
 
   // position the disk head
   lseek(dev_fd, (off_t)0, SEEK_SET);
@@ -772,7 +1072,7 @@ main(int argc, char **argv)
                   sqr_time(&res, res);
                   block_info[blocks].sumsqtime.tv_sec = res.tv_sec;
                   block_info[blocks].sumsqtime.tv_nsec = res.tv_nsec;
-                  if (verbosity > 8)
+                  if (verbosity > 10)
                     fprintf(stderr, "block: %lli, samples: %i, sumtime: %li.%09li, sumsqtime: %li.%09li\n", 
                         blocks, 
                         block_info[blocks].samples,
@@ -788,7 +1088,7 @@ main(int argc, char **argv)
                   sum_time(&(block_info[blocks].sumtime), &res);
                   sqr_time(&res, res);
                   sum_time(&(block_info[blocks].sumsqtime), &res);
-                  if (verbosity > 8)
+                  if (verbosity > 10)
                     fprintf(stderr, "block: %lli, samples: %i, sumtime: %li.%09li, sumsqtime: %li.%09li\n", 
                         blocks, 
                         block_info[blocks].samples,
@@ -881,20 +1181,23 @@ main(int argc, char **argv)
         {
           long long high_dev=0;
           long long sum_invalid=0;
+          loop++;
           // check standard deviation for blocks
           for (int i =0; i < blocks; i++)
             {
               sqrt_time(&res, block_info[i].sumsqtime);
               div_time(&res, res, block_info[i].samples);
-              if (res.tv_sec > 1)
+              if (res.tv_sec * 1.0 + (res.tv_nsec * 1.0) / 1E9 > max_std_dev)
                 high_dev++;
               
               if (block_info[i].valid == 0)
                 sum_invalid++;
             }
-          if (loop < loops || high_dev/(blocks*1.0) > 0.25 || sum_invalid/(blocks*1.0) > 0.10)
+          if (loop < min_reads || high_dev/(blocks*1.0) > 0.25 || sum_invalid/(blocks*1.0) > 0.10)
             {
-              loop++;
+              if (verbosity > 1 && !(loop < min_reads) && (high_dev/(blocks*1.0) > 0.25 || sum_invalid/(blocks*1.0) > 0.10))
+                fprintf(stderr, "low confidance for the results, re-reading whole disk\n");
+
               blocks=0;
               if (lseek(dev_fd, (off_t)0, SEEK_SET) < 0)
                 {
@@ -905,33 +1208,126 @@ main(int argc, char **argv)
           else
             break;
 
-          if (loop > 5)
+          if (loop > max_reads)
             {
-              fprintf(stderr, "Warning; read whole segment 5 times, still can't get low amount of erronous blocks\n");
+              fprintf(stderr, "Warning; read whole disk %lli times, still can't get high confidence\n", max_reads);
               break;
             }
         }
     }
-  for(long long i=0; i<blocks; i++)
+  if (verbosity > 1)
+    for(long long i=0; i<blocks; i++)
+      {
+        sqrt_time(&res, block_info[i].sumsqtime);
+        div_time(&res, res, block_info[i].samples);
+        struct timespec avg;
+        div_time(&avg, block_info[i].sumtime, block_info[i].samples);
+        if (res.tv_sec *1.0 + res.tv_nsec *1.0/1E9 > max_std_dev)
+          {
+            fprintf(stderr, "high std dev for block %lli:%3li.%09li  "
+                "sumsqtime:%5li.%09li, average: %li.%09li\n", 
+                i, 
+                res.tv_sec, 
+                res.tv_nsec,
+                block_info[i].sumsqtime.tv_sec, 
+                block_info[i].sumsqtime.tv_nsec,
+                avg.tv_sec,
+                avg.tv_nsec);
+          }
+      }
+  for(int tries=0; tries < max_reads; tries++)
     {
-      sqrt_time(&res, block_info[i].sumsqtime);
-      div_time(&res, res, block_info[i].samples);
-      struct timespec avg;
-      div_time(&avg, block_info[i].sumtime, block_info[i].samples);
-      if (res.tv_sec > 1)
+      fprintf(stderr, "re-trying uncertain blocks re-reads\n");
+      struct block_list_t* block_list;
+      struct block_info_t* block_data;
+
+      block_list = find_uncertain_blocks(block_info, blocks, max_std_dev, min_reads);
+
+      if (block_list == NULL)
         {
-          fprintf(stderr, "high std dev for block %lli:%3li.%09li  sumsqtime:%5li.%09li, average: %li.%09li\n", 
-              i, 
-              res.tv_sec, 
-              res.tv_nsec,
-              block_info[i].sumsqtime.tv_sec, 
-              block_info[i].sumsqtime.tv_nsec,
-              avg.tv_sec,
-              avg.tv_nsec);
+          if (verbosity > 2)
+            {
+              fprintf(stderr, "no uncertain blocks found\n");
+            }
+          break;
         }
+
+      size_t block_number=0;
+      while (!(block_list[block_number].off == 0 && 
+          block_list[block_number].len == 0))
+        {
+          off_t offset, length;
+          offset = block_list[block_number].off;
+          length = block_list[block_number].len;
+          if (verbosity > 1)
+            fprintf(stderr, "processing block no %lli of length %lli\n", offset, length);
+
+          block_data = read_blocks(dev_fd, dev_stat_path, offset, length);
+          
+          if (block_data == NULL)
+            {
+              if (verbosity > 2)
+                fprintf(stderr, "can't re-read block %lli of length %lli\n", offset, length);
+              block_number++;
+              continue;
+            }
+
+          for (int i=0; i < length; i++)
+            {
+              if(block_data[i].valid == 1)
+                {
+                  if (block_info[offset].valid == 0)
+                    {
+                      block_info[offset].sumtime.tv_sec = 0;
+                      block_info[offset].sumtime.tv_nsec = 0;
+                      block_info[offset].sumsqtime.tv_sec = 0;
+                      block_info[offset].sumsqtime.tv_nsec = 0;
+                      block_info[offset].samples = 0;
+                    }
+                  sum_time(
+                      &(block_info[offset].sumtime), 
+                      &(block_data[i].sumtime));
+                  sum_time(
+                      &(block_info[offset].sumsqtime), 
+                      &(block_data[i].sumsqtime));
+                  block_info[offset].samples += block_data[i].samples;
+                }
+            }
+
+          free(block_data);
+          block_number++;
+        }
+
+      free(block_list);
     }
   // TODO: check statistical deviation of sectors
   // TODO: re-read sectors with high deviation
+  if (verbosity > 1)
+    {
+      fprintf(stderr, "after re-tries:\n");
+      for(long long i=0; i<blocks; i++)
+        {
+          sqrt_time(&res, block_info[i].sumsqtime);
+          div_time(&res, res, block_info[i].samples);
+          struct timespec avg;
+          div_time(&avg, block_info[i].sumtime, block_info[i].samples);
+          if (res.tv_sec * 1.0 + res.tv_nsec * 1.0 / 1E9 > max_std_dev || 
+              avg.tv_sec > 15 || block_info[i].valid == 0)
+            {
+              fprintf(stderr, "high std dev for block %lli:%3li.%09li  "
+                  "sumsqtime:%5li.%09li, average: %li.%09li, valid: %i\n", 
+                  i, 
+                  res.tv_sec, 
+                  res.tv_nsec,
+                  block_info[i].sumsqtime.tv_sec, 
+                  block_info[i].sumsqtime.tv_nsec,
+                  avg.tv_sec,
+                  avg.tv_nsec,
+                  block_info[i].valid);
+            }
+
+        }
+    }
   clock_gettime(TIMER_TYPE, &timee);
   fprintf(stderr, "sum time: %lis.%lims.%liµs.%lins\n", sumtime.tv_sec,
       sumtime.tv_nsec/1000000,
@@ -949,17 +1345,66 @@ main(int argc, char **argv)
   sqrt_time(&res, sumsqtime);
   div_time(&res, res, blocks);
   fprintf(stderr, "std dev: %li.%09li(s)\n", res.tv_sec, res.tv_nsec);
-  fprintf(stderr, "raw read statistics:\n"); 
-  fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
-      "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
-      errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
+  if (verbosity > 2)
+    {
+      fprintf(stderr, "raw read statistics:\n"); 
+      fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
+          "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
+          errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
+    }
   long long sum_invalid=0;
+  vvfast=0;
+  vfast=0;
+  fast=0;
+  normal=0;
+  slow=0;
+  vslow=0;
+  vvslow=0;
   for (int i=0; i< blocks; i++)
     {
       if (block_info[i].valid == 0)
         sum_invalid++;
+
+      div_time(&res, block_info[i].sumtime, block_info[i].samples);
+
+      if (res.tv_sec < 2) // very very fast read
+        {
+          ++vvfast;
+        }
+      else if (res.tv_sec < 5) // very fast read
+        {
+          ++vfast;
+        }
+      else if (res.tv_sec < 10) // fast read
+        {
+          ++fast;
+        }
+      else if (res.tv_sec < 25) // normal read
+        {
+          ++normal;
+        }
+      else if (res.tv_sec < 50) // slow read
+        {
+          ++slow;
+        }
+      else if (res.tv_sec < 80) // very slow read
+        {
+          ++vslow;
+        }
+      else // very very slow read
+        {
+          ++vvslow;
+        }
     }
   fprintf(stderr, "Number of invalid measures because of interrupted reads: %lli\n", sum_invalid);
+  fprintf(stderr, "read statistics:\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
+      "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
+      vvfast, vfast, fast, normal, slow, vslow, vvslow);
+
+  if (output != NULL)
+    {
+      write_to_file(output, block_info, blocks);
+    }
 
   free(dev_stat_path);
   free(block_info);
