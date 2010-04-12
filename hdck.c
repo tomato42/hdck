@@ -181,6 +181,106 @@ sum_time(struct timespec *sum, struct timespec *adder)
   return;
 }
 
+void
+make_real_time(void)
+{
+  struct sched_param sp;
+  sp.sched_priority = 31;
+  if (sched_setscheduler(0,SCHED_FIFO,&sp) < 0)
+    err(1, "scheduler");
+}
+
+void
+set_affinity(void)
+{
+  cpu_set_t cpu_set;
+  CPU_ZERO(&cpu_set); // zero the CPU set
+  CPU_SET(0, &cpu_set); // add first cpu to the set
+  if (sched_setaffinity(0,sizeof(cpu_set_t), &cpu_set) <0)
+    err(1, "affinity");
+}
+
+void
+set_rt_ioprio(void)
+{
+  if (ioprio_set(IOPRIO_WHO_PROCESS, 
+               0, 
+               IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)
+      ) != 0)
+  err(1, "ioprio: can't make process IO class real-time");
+}
+
+
+/// get file size
+long long
+get_file_size(int dev_fd)
+{
+  struct stat file_stat;
+  char* dev_stat_path;
+  if (fstat(dev_fd, &file_stat) == -1)
+    err(1, "fstat");
+  if (S_ISREG(file_stat.st_mode))
+    {
+      filesize = file_stat.st_size;
+      if (verbosity > 1)
+        {
+          printf("file size: %lli bytes\n", file_stat.st_size);
+        }
+    }
+  else if (S_ISBLK(file_stat.st_mode))
+    {
+      if (ioctl(dev_fd, BLKGETSIZE64, &filesize) == -1)
+        err(1, "ioctl: BLKGETSIZE64");
+      if (verbosity > 1)
+        printf("file size: %lli bytes\n", filesize);
+    }
+  else
+    {
+      printf("%s: %s: File is neither device file nor regular file", __FILE__, "main");
+      exit(EXIT_FAILURE);
+    }
+}
+
+char *
+readlink_malloc (char *filename)
+{
+  int size = 100;
+
+  while (1)
+    {
+      char *buffer = (char *) malloc (size);
+      if (buffer == NULL)
+        err(1, "malloc");
+
+      int nchars = readlink (filename, buffer, size);
+      if (nchars < size)
+        if (nchars < 0)
+          err(1, "readlink")
+        else
+          {
+            buffer[nchars]='\0';
+            return buffer;
+          }
+      free (buffer);
+      size *= 2;
+    }
+}
+char*
+get_file_stat_sys_name(char* filename)
+{
+  char* devname = NULL;
+  struct stat file_stat;
+
+  stat(filename, &file_stat);
+
+  if (S_ISLNK(file_stat.st_mode))
+    {
+    }
+  else
+    {
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -309,29 +409,18 @@ main(int argc, char **argv)
   off_t nread;
 
   // make the process real-time
-  struct sched_param sp;
-  sp.sched_priority = 31;
-  if (sched_setscheduler(0,SCHED_FIFO,&sp) < 0)
-    err(1, "scheduler");
+  make_real_time();
 
+  // make the process run on single core
   if (!noaffinity)
     {
-      // make the process run on single core
-      cpu_set_t cpu_set;
-      CPU_ZERO(&cpu_set); // zero the CPU set
-      CPU_SET(0, &cpu_set); // add first cpu to the set
-      if (sched_setaffinity(0,sizeof(cpu_set_t), &cpu_set) <0)
-        err(1, "affinity");
+      set_affinity();
     }
 
+  // make the process' IO prio highest 
   if (!nortio)
     {
-      // make the process' IO prio highest 
-      if (ioprio_set(IOPRIO_WHO_PROCESS, 
-                     0, 
-                     IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)
-            ) != 0)
-        err(1, "ioprio: can't make process IO class real-time");
+      set_rt_ioprio();
     }
  
   int flags = O_RDONLY | O_LARGEFILE; 
@@ -349,6 +438,7 @@ main(int argc, char **argv)
         printf("NOT setting O_DIRECT on file\n");
     }
 
+  // no sync on file
   if (!nosync)
     {
       if (verbosity > 5)
@@ -361,6 +451,7 @@ main(int argc, char **argv)
         printf("NOT setting O_SYNC on file\n");
     }
 
+  // open in exclusive mode
   if (exclusive)
     {
       if (verbosity > 5)
@@ -379,33 +470,9 @@ main(int argc, char **argv)
       err(1, "open");
     }
 
-  // get file size
-  struct stat file_stat;
-  char* dev_stat_path;
-  if (fstat(dev_fd, &file_stat) == -1)
-    err(1, "fstat");
-  if (S_ISREG(file_stat.st_mode))
-    {
-      filesize = file_stat.st_size;
-      if (verbosity > 1)
-        {
-          printf("file size: %lli bytes\n", file_stat.st_size);
-        }
-    }
-  else if (S_ISBLK(file_stat.st_mode))
-    {
-      if (ioctl(dev_fd, BLKGETSIZE64, &filesize) == -1)
-        err(1, "ioctl: BLKGETSIZE64");
-      if (verbosity > 1)
-        printf("file size: %lli bytes\n", filesize);
+  filesize = get_file_size(dev_fd);
 
-      dev_stat_path = path to the stat file of device in /sys
-    }
-  else
-    {
-      printf("%s: %s: File is neither device file nor regular file", __FILE__, "main");
-      exit(EXIT_FAILURE);
-    }
+  dev_stat_path = get_file_stat_sys_name(filename);
 
   fesetround(2); // round UP
   block_info = calloc(lrintl(filesize*1.0l/512/sectors), sizeof(struct block_info_t));
@@ -464,6 +531,33 @@ main(int argc, char **argv)
               ++errors;
 
               // omit block
+              if (lseek(dev_fd, (off_t)512*sectors, SEEK_CUR) < 0)
+                {
+                  nread = -1; // exit loop, end of device
+                }
+            }
+        }
+      // when the read was incomplete or interrupted
+      else if (nread != sectors*512 || read_e-read_s-1 != 0 || write_e != write_s)
+        {
+          diff_time(&res, time1, time2);
+          block_info[blocks].valid = 0;
+          if (nread != sectors*512)
+            {
+              // seek to start of next block
+              if (lseek(dev_fd, (off_t)512*sectors-nread, SEEK_CUR) < 0)
+                {
+                  nread = -1; // exit loop, end of device
+                }
+            }
+        }
+      else
+        {
+          diff_time(&res, time1, time2);
+          block_info[blocks].valid = 1;
+          block_info[blocks].sumtime = res;
+          sqr_time(&res, res);
+          block_info[blocks].sumsqtime = res;
               if (lseek(dev_fd, (off_t)512*sectors, SEEK_CUR) < 0)
                 {
                   nread = -1; // exit loop, end of device
