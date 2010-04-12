@@ -60,8 +60,12 @@ usage()
   printf("-x, --exclusive     use exclusive access\n");
   printf("                    (runs faster, but partitions must be umounted)\n");
   printf("--nodirect          don't use O_DIRECT and don't flush buffers before reading\n");
+  printf("--nosync            don't use O_SYNC\n");
   printf("--noaffinity        don't set CPU affinity to 0th core/CPU\n");
-  printf("--nort              don't change priority to real-time\n");
+  printf("--nortio            don't change IO priority to real-time\n");
+  printf("--sector-symbols    print symbols representing quality of each group of sectors\n");
+  printf("--sector-times      print time it takes to read each group of sectors (in ns)\n");
+  printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
   printf("-h, -?              print this message\n");
 }
@@ -126,7 +130,13 @@ main(int argc, char **argv)
    int exclusive = 0;
    int nodirect = 0; ///< don't use O_DIRECT access
    int noaffinity = 0; ///< don't set CPU affinity
-   int nort = 0; ///< don't change process scheduling to RT
+   int nortio = 0; ///< don't change process scheduling to RT
+  int sector_times = 0;
+  enum {
+      PRINT_TIMES = 1,
+      PRINT_SYMBOLS
+  };
+  int nosync = 0;
 
   if (argc == 1)
     {
@@ -143,7 +153,11 @@ main(int argc, char **argv)
            {"nodirect", 0, &nodirect, 1}, // 2
            {"verbose", 0, 0, 'v'}, // 3
            {"noaffinity", 0, &noaffinity, 1}, // 4
-           {"nort", 0, &nort, 1}, // 5
+           {"nortio", 0, &nortio, 1}, // 5
+           {"sector-times", 0, &sector_times, PRINT_TIMES}, // 6
+           {"sector-symbols", 0, &sector_times, PRINT_SYMBOLS}, // 7
+           {"nosync", 0, &nosync, 1}, // 8
+           {"noverbose", 0, 0, 0}, // 9
            {0, 0, 0, 0}
        };
 
@@ -161,9 +175,9 @@ main(int argc, char **argv)
                    printf(" with arg %s", optarg);
                printf("\n");
              }
-           if (option_index == 2)
+           if (option_index == 9)
              {
-               nodirect = 1;
+               verbosity--;
                break;
              }
            break;
@@ -235,25 +249,61 @@ main(int argc, char **argv)
   if (sched_setaffinity(0,sizeof(cpu_set_t), &cpu_set) <0)
     err(1, "affinity");
 
-  if (!nort)
+  if (!nortio)
     {
       // make the process' IO prio highest 
       if (ioprio_set(IOPRIO_WHO_PROCESS, 
                      0, 
                      IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)
             ) != 0)
-        err(1, "ioprio: can't make process real-time");
+        err(1, "ioprio: can't make process IO class real-time");
     }
+ 
+  int flags = O_RDONLY | O_LARGEFILE; 
 
   // open the file with disabled caching
-  // (O_EXCL works on devices too)
-  dev_fd = open(filename, O_RDONLY | O_DIRECT | O_LARGEFILE | O_SYNC);
+  if (!nodirect)
+    {
+      if (verbosity > 5)
+        printf("setting O_DIRECT flag on file\n");
+      flags = flags | O_DIRECT;
+    }
+  else
+    {
+      if (verbosity > 5)
+        printf("NOT setting O_DIRECT on file\n");
+    }
+  if (!nosync)
+    {
+      if (verbosity > 5)
+        printf("setting O_SYNC flag on file\n");
+      flags = flags | O_SYNC;
+    }
+  else
+    {
+      if (verbosity > 5)
+        printf("NOT setting O_SYNC on file\n");
+    }
+
+  if (exclusive)
+    {
+      if (verbosity > 5)
+        printf("setting O_EXCL on file\n");
+      flags = flags | O_EXCL;
+    }
+  else
+    {
+      if (verbosity > 5)
+        printf("NOT setting O_EXCL on file\n");
+    }
+
+  dev_fd = open(filename, flags);
   if (dev_fd < 0)
     {
       err(1, NULL);
     }
 
-  // get memory alligned pointer
+  // get memory alligned pointer (needed for O_DIRECT access)
   ibuf = malloc(sectors*512+pagesize);
   ibuf = ptr_align(ibuf, pagesize);
 
@@ -301,37 +351,50 @@ main(int argc, char **argv)
         diff_time(&res, time1, time2);
 
       if (res.tv_nsec < 2000000) // very very fast read
-        //write(0,"_",1), 
-        ++vvfast;
+        {
+          if (sector_times == PRINT_SYMBOLS) write(0,"_",1);
+          ++vvfast;
+        }
       else if (res.tv_nsec < 5000000) // very fast read
-        //write(0,".",1), 
-        ++vfast;
+        {
+          if (sector_times == PRINT_SYMBOLS) write(0,".",1);
+          ++vfast;
+        }
       else if (res.tv_nsec < 10000000) // fast read
-        //write(0,",",1), 
-        ++fast;
+        {
+          if (sector_times == PRINT_SYMBOLS) write(0,",",1);
+          ++fast;
+        }
       else if (res.tv_nsec < 25000000) // normal read
-        //write(0,"-",1), 
-        ++normal;
+        {
+          if (sector_times == PRINT_SYMBOLS) write(0,"-",1);
+          ++normal;
+        }
       else if (res.tv_nsec < 50000000) // slow read
-        //write(0,"+",1), 
-        ++slow;
+        {
+          if (sector_times == PRINT_SYMBOLS) write(0,"+",1);
+          ++slow;
+        }
       else if (res.tv_nsec < 80000000) // very slow read
-        //write(0,"#",1), 
-        ++vslow;
+        {
+          if (sector_times == PRINT_SYMBOLS) write(0,"#",1);
+          ++vslow;
+        }
       else // very very slow read
         {
-          //write(0,"!",1);
+          if (sector_times == PRINT_SYMBOLS) write(0,"!",1);
           ++vvslow;
           //fprintf(stderr, "%lli\n", blocks * sectors * 1ll);
         }
-      printf("%li\n",res.tv_nsec/1000+res.tv_sec*1000000); 
+      if (sector_times == PRINT_TIMES)
+        printf("%li\n",res.tv_nsec/1000+res.tv_sec*1000000); 
 //      fsync(0);
       blocks++;
       sum_time(&sumtime, &res);
       if (nread == 0)
         break;
 
-      if (blocks % 1000 == 0)
+      if (blocks % 1000 == 0 && verbosity >= 0)
         {
           clock_gettime(TIMER_TYPE, &timee);
           diff_time(&res, times, timee);
