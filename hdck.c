@@ -531,6 +531,7 @@ main(int argc, char **argv)
                   times, timee, /**< wall clock start and end */
                   sumsqtime; /**< sum of squares (for std. deviation) */
   long long blocks = 0;
+  long long abs_blocks = 0;
 
   int dev_fd = 0;
   char *ibuf;
@@ -646,10 +647,11 @@ main(int argc, char **argv)
     vvslow = 0;  
   long long read_s=0, write_s=0, read_e=1, write_e=0, read_sec_s=0, read_sec_e=0;
   int next_is_valid=1;
+  int loop=0, loops=3;
 
   // position the disk head
   lseek(dev_fd, (off_t)0, SEEK_SET);
-  read(dev_fd, ibuf, 1);
+  read(dev_fd, ibuf, pagesize);
   lseek(dev_fd, (off_t)0, SEEK_SET);
 
   clock_gettime(TIMER_TYPE, &time2);
@@ -786,6 +788,7 @@ main(int argc, char **argv)
         printf("%li r:%lli rs: %lli w:%lli\n",res.tv_nsec/1000+res.tv_sec*1000000, read_s, read_sec_s, write_s); 
 //      fsync(0);
       blocks++;
+      abs_blocks++;
       sum_time(&sumtime, &res);
       sqr_time(&res, res);
       sum_time(&sumsqtime, &res);
@@ -798,7 +801,7 @@ main(int argc, char **argv)
           cur_speed = sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
           diff_time(&res, times, timee);
           float speed;
-          speed = blocks * sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
+          speed = abs_blocks * sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
           float percent;
           if (max_sectors == 0)
             percent = (blocks * sectors * 512.0f) / (filesize * 1.0f);
@@ -817,7 +820,19 @@ main(int argc, char **argv)
         }
 
       if (nread == 0 || (max_sectors != 0 && blocks * sectors >= max_sectors ))
-        break;
+        {
+          if (loop < loops)
+            {
+              loop++;
+              blocks=0;
+              if (lseek(dev_fd, (off_t)0, SEEK_SET) < 0)
+                {
+                  nread = -1; // exit loop, end of device
+                }
+            }
+          else
+            break;
+        }
     }
   clock_gettime(TIMER_TYPE, &timee);
   fprintf(stderr, "sum time: %lis.%lims.%liµs.%lins\n", sumtime.tv_sec,
