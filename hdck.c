@@ -54,6 +54,7 @@ sectors = 256;
 int
 verbosity = 0;
 
+/// information about a single block (256 sectors by default)
 struct block_info_t {
     struct timespec sumtime; ///< sum of all the read times
     struct timespec sumsqtime; ///< sum of all squared read times
@@ -186,7 +187,7 @@ main(int argc, char **argv)
   int c;
   int digit_optind = 0;
   char* filename = NULL;
-  int exclusive = 0;
+  int exclusive = 0; ///< use exclusive file access (O_EXCL)
   int nodirect = 0; ///< don't use O_DIRECT access
   int noaffinity = 0; ///< don't set CPU affinity
   int nortio = 0; ///< don't change process scheduling to RT
@@ -296,11 +297,11 @@ main(int argc, char **argv)
       exit(EXIT_FAILURE);
     }
 
-  struct timespec time1, time2, 
-                  sumtime, /* sumaric time */
-                  res, /* temp result */
-                  times, timee,
-                  sumsqtime; /* sum of squares (for std. deviation) */
+  struct timespec time1, time2, /**< time it takes to read single block */
+                  sumtime, /**< sum of all times */
+                  res, /**< temp result */
+                  times, timee, /**< wall clock start and end */
+                  sumsqtime; /**< sum of squares (for std. deviation) */
   long long blocks = 0;
 
   int dev_fd = 0;
@@ -375,7 +376,7 @@ main(int argc, char **argv)
   dev_fd = open(filename, flags);
   if (dev_fd < 0)
     {
-      err(1, NULL);
+      err(1, "open");
     }
 
   // get file size
@@ -388,13 +389,13 @@ main(int argc, char **argv)
       filesize = file_stat.st_size;
       if (verbosity > 1)
         {
-          printf("file size: %lli B\n", file_stat.st_size);
+          printf("file size: %lli bytes\n", file_stat.st_size);
         }
     }
   else if (S_ISBLK(file_stat.st_mode))
     {
       if (ioctl(dev_fd, BLKGETSIZE64, &filesize) == -1)
-        err(1, "ioctl");
+        err(1, "ioctl: BLKGETSIZE64");
       if (verbosity > 1)
         printf("file size: %lli bytes\n", filesize);
 
@@ -406,7 +407,7 @@ main(int argc, char **argv)
       exit(EXIT_FAILURE);
     }
 
-  fesetround(2);
+  fesetround(2); // round UP
   block_info = calloc(lrintl(filesize*1.0l/512/sectors), sizeof(struct block_info_t));
   if (block_info == NULL)
     {
@@ -451,7 +452,7 @@ main(int argc, char **argv)
       nread = read(dev_fd, ibuf, sectors*512);
       clock_gettime(TIMER_TYPE, &time2);
       get_read_writes(dev_stat_path, &read_e, &write_e);
-      if (nread < 0)
+      if (nread < 0) // on error
         {
           if (errno != EIO)
             err(1, NULL);
@@ -462,22 +463,30 @@ main(int argc, char **argv)
               write(0, "E", 1);
               ++errors;
 
-              // omit sector
+              // omit block
               if (lseek(dev_fd, (off_t)512*sectors, SEEK_CUR) < 0)
                 {
                   nread = -1; // exit loop, end of device
                 }
             }
         }
-      else
-        diff_time(&res, time1, time2);
-
-      if(read_e-read_s-1 != 0 || write_e != write_s)
+      // when the read was incomplete or interrupted
+      else if (nread != sectors*512 || read_e-read_s-1 != 0 || write_e != write_s)
         {
+          diff_time(&res, time1, time2);
           block_info[blocks].valid = 0;
+          if (nread != sectors*512)
+            {
+              // seek to start of next block
+              if (lseek(dev_fd, (off_t)512*sectors-nread, SEEK_CUR) < 0)
+                {
+                  nread = -1; // exit loop, end of device
+                }
+            }
         }
       else
         {
+          diff_time(&res, time1, time2);
           block_info[blocks].valid = 1;
           block_info[blocks].sumtime = res;
           sqr_time(&res, res);
@@ -485,6 +494,7 @@ main(int argc, char **argv)
           diff_time(&res, time1, time2);
           block_info[blocks].samples++;
         }
+
 
       if (res.tv_nsec < 2000000 && res.tv_sec == 0) // very very fast read
         {
