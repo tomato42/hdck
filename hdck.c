@@ -67,7 +67,6 @@ diff_time(struct timespec *res, struct timespec start, struct timespec end)
     {
       res->tv_sec = end.tv_sec-start.tv_sec-1;
       res->tv_nsec = 1000000000+end.tv_nsec-start.tv_nsec;
-      
     } 
   else 
     {
@@ -125,11 +124,15 @@ main(int argc, char **argv)
     err(1, "affinity");
 
   // make the process' IO prio highest 
-  if (ioprio_set(IOPRIO_WHO_PROCESS, 0, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)) != 0)
+  if (ioprio_set(IOPRIO_WHO_PROCESS, 
+                 0, 
+                 IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)
+        ) != 0)
     err(1, "ioprio");
 
   // open the file with disabled caching
-  dev_fd = open(argv[1], O_RDONLY | O_DIRECT | O_LARGEFILE | O_SYNC); // O_EXCL works
+  // (O_EXCL works on devices too)
+  dev_fd = open(argv[1], O_RDONLY | O_DIRECT | O_LARGEFILE | O_SYNC);
   if (dev_fd < 0)
     {
       err(1, NULL);
@@ -219,7 +222,9 @@ main(int argc, char **argv)
           diff_time(&res, times, timee);
           float speed;
           speed = blocks * sectors * 512 / 1024 * 1.0f / 1024 / res.tv_sec;
-          fprintf(stderr,"read %lli sectors (%.3fMiB/s)\n", blocks*sectors, speed);
+          fprintf(stderr,"read %lli sectors (%.3fMiB/s)\n",
+             blocks*sectors,
+             speed);
         }
 
  /*     printf("%lis:%lims:%liµs:%lins\n", res.tv_sec,
@@ -240,7 +245,8 @@ main(int argc, char **argv)
   fprintf(stderr, "wall time: %lis.%lims.%liµs.%lins\n", res.tv_sec,
       res.tv_nsec/1000000, res.tv_nsec/1000%1000,
       res.tv_nsec%1000);
-  fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n50ms: %lli\n80ms: %lli"
-      "\n80+ms: %lli\n", errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
+  fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
+      "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
+      errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
   return 1;
 }
