@@ -879,7 +879,20 @@ main(int argc, char **argv)
 
       if (nread == 0 || (max_sectors != 0 && blocks * sectors >= max_sectors ))
         {
-          if (loop < loops)
+          long long high_dev=0;
+          long long sum_invalid=0;
+          // check standard deviation for blocks
+          for (int i =0; i < blocks; i++)
+            {
+              sqrt_time(&res, block_info[i].sumsqtime);
+              div_time(&res, res, block_info[i].samples);
+              if (res.tv_sec > 1)
+                high_dev++;
+              
+              if (block_info[i].valid == 0)
+                sum_invalid++;
+            }
+          if (loop < loops || high_dev/(blocks*1.0) > 0.25 || sum_invalid/(blocks*1.0) > 0.10)
             {
               loop++;
               blocks=0;
@@ -891,6 +904,12 @@ main(int argc, char **argv)
             }
           else
             break;
+
+          if (loop > 5)
+            {
+              fprintf(stderr, "Warning; read whole segment 5 times, still can't get low amount of erronous blocks\n");
+              break;
+            }
         }
     }
   for(long long i=0; i<blocks; i++)
@@ -930,6 +949,7 @@ main(int argc, char **argv)
   sqrt_time(&res, sumsqtime);
   div_time(&res, res, blocks);
   fprintf(stderr, "std dev: %li.%09li(s)\n", res.tv_sec, res.tv_nsec);
+  fprintf(stderr, "raw read statistics:\n"); 
   fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
       "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
       errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
