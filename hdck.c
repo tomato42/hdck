@@ -141,10 +141,17 @@ diff_time(struct timespec *res, struct timespec start, struct timespec end)
 void
 sqr_time(struct timespec *res, struct timespec val)
 {
-  res->tv_sec = 1000000000 * val.tv_sec * val.tv_sec + 
+  long double temp=0.0;
+  temp = val.tv_sec + (val.tv_nsec * 1.0L) / 1000000000.0L;
+  temp = temp * temp;
+  
+  res->tv_sec = floorl(temp);
+  temp = temp - floorl(temp);
+  res->tv_nsec = floorl(temp * 1000000000LL);
+/*  res->tv_sec = 1000000000 * val.tv_sec * val.tv_sec + 
                 2 * val.tv_nsec * val.tv_sec + 
-                val.tv_nsec * val.tv_nsec / 1000000000;
-  res->tv_nsec = val.tv_nsec * val.tv_nsec % 1000000000;
+                ((val.tv_nsec * val.tv_nsec) / 1000000000);
+  res->tv_nsec = ((val.tv_nsec * 1LL) * (val.tv_nsec * 1LL)) % 1000000000;*/
 }
 
 /** take square root out of time 
@@ -153,11 +160,11 @@ void
 sqrt_time(struct timespec *res, struct timespec val)
 {
   res->tv_sec = floor(sqrt(val.tv_sec));
-  res->tv_nsec = (sqrt(val.tv_sec) - res->tv_sec) * 1000000000 + 
+  res->tv_nsec = (sqrt(val.tv_sec) - res->tv_sec) * 1000000000LL + 
     floor(sqrt(val.tv_nsec));
-  if (res->tv_nsec >= 1000000000)
+  if (res->tv_nsec >= 1000000000LL)
     {
-      res->tv_nsec -= 1000000000;
+      res->tv_nsec -= 1000000000LL;
       res->tv_sec += 1;
     }
 }
@@ -166,7 +173,7 @@ void
 div_time(struct timespec *res, struct timespec divisor, long long divider)
 {
   res->tv_sec = divisor.tv_sec / divider;
-  res->tv_nsec = ((divisor.tv_sec % divider * 1.0l) / divider) * 1000000000 +
+  res->tv_nsec = ((divisor.tv_sec % divider * 1.0l) / divider) * 1000000000LL +
     divisor.tv_nsec / divider;
 }
 
@@ -175,11 +182,36 @@ sum_time(struct timespec *sum, struct timespec *adder)
 {
   sum->tv_sec += adder->tv_sec;
   sum->tv_nsec += adder->tv_nsec;
-  if (sum->tv_nsec >= 1000000000)
+  if (sum->tv_nsec >= 1000000000LL)
     {
-      sum->tv_nsec -= 1000000000;
+      sum->tv_nsec -= 1000000000LL;
       sum->tv_sec += 1;
     }
+  return;
+}
+
+void
+times_time(struct timespec *res, long long multiplicator)
+{
+  // fields in timespec are time_t and long, so they are too small for large
+  // multiplications
+  long long tmp_s;
+  long long tmp_ns;
+  
+  tmp_s = res->tv_sec * multiplicator;
+  tmp_ns = res->tv_nsec * multiplicator;
+
+  if (tmp_ns >= 1000000000LL)
+    {
+      tmp_s += tmp_ns / 1000000000LL;
+      tmp_ns %= 1000000000LL;
+//      res->tv_nsec -= 1000000000;
+//      res->tv_sec += 1;
+    }
+
+  res->tv_sec = tmp_s; 
+  res->tv_nsec = tmp_ns; 
+
   return;
 }
 
@@ -218,7 +250,6 @@ long long
 get_file_size(int dev_fd)
 {
   struct stat file_stat;
-  char* dev_stat_path;
   off_t filesize;
   if (fstat(dev_fd, &file_stat) == -1)
     err(1, "fstat");
@@ -308,7 +339,6 @@ read_link(char* link)
 char*
 get_file_stat_sys_name(char* filename)
 {
-  char* devname = NULL;
   struct stat file_stat;
   char* name;
   char* stat_sys_name;
@@ -335,7 +365,7 @@ get_file_stat_sys_name(char* filename)
     }
 
   name = strrchr(filename, '/');
-  name++;
+  name++; // omit the last '/'
 
   
   if (verbosity > 2)
@@ -412,7 +442,6 @@ int
 main(int argc, char **argv)
 {
   int c;
-  int digit_optind = 0;
   char* filename = NULL;
   int exclusive = 0; ///< use exclusive file access (O_EXCL)
   int nodirect = 0; ///< don't use O_DIRECT access
@@ -437,7 +466,6 @@ main(int argc, char **argv)
     }
 
   while (1) {
-    int this_option_optind = optind ? optind : 1;
     int option_index = 0;
     struct option long_options[] = {
         {"file", 1, 0, 'f'}, // 0
@@ -555,6 +583,10 @@ main(int argc, char **argv)
     }
  
   int flags = O_RDONLY | O_LARGEFILE; 
+  if (verbosity > 5)
+    printf("setting O_RDONLY flag on file\n");
+  if (verbosity > 5)
+    printf("setting O_LARGEFILE flag on file\n");
 
   // open the file with disabled caching
   if (!nodirect)
@@ -611,7 +643,7 @@ main(int argc, char **argv)
       sizeof(struct block_info_t));
   if (block_info == NULL)
     {
-      printf("Allocation error, tried to allocate %li bytes:\n", 
+      printf("Allocation error, tried to allocate %lli bytes:\n", 
           number_of_blocks* sizeof(struct block_info_t));
       err(1, "calloc");
     }
@@ -677,6 +709,7 @@ main(int argc, char **argv)
 
       if (nread < 0) // on error
         {
+          // TODO save that an error occured when reading the block
           if (errno != EIO)
             err(1, NULL);
           else
@@ -717,26 +750,52 @@ main(int argc, char **argv)
             }
           // invalidate next read block (to ignore seeking)
           next_is_valid = 0;
+
+          // TODO: should invalidate the previous block too as the interrupting
+          // read/write could finish after our read
         }
       else // when the read was correct
         {
-          if (block_info[blocks].valid == 0 || (block_info[blocks].valid == 1 && next_is_valid == 1))
+          diff_time(&res, time1, time2);
+          //make the times stored in block struct in ms not in ns
+          times_time(&res, 1000); 
+          // update only if we can gather meaningful data
+          if (block_info[blocks].valid == 0 || 
+              (block_info[blocks].valid == 1 && next_is_valid == 1))
             {
               if (block_info[blocks].valid == 0 && next_is_valid == 1)
                 {
                   // first valid read
                   block_info[blocks].samples = 1;
-                  block_info[blocks].sumtime = res;
+                  block_info[blocks].sumtime.tv_sec = res.tv_sec;
+                  block_info[blocks].sumtime.tv_nsec = res.tv_nsec;
                   sqr_time(&res, res);
-                  block_info[blocks].sumsqtime = res;
+                  block_info[blocks].sumsqtime.tv_sec = res.tv_sec;
+                  block_info[blocks].sumsqtime.tv_nsec = res.tv_nsec;
+                  if (verbosity > 8)
+                    fprintf(stderr, "block: %lli, samples: %i, sumtime: %li.%09li, sumsqtime: %li.%09li\n", 
+                        blocks, 
+                        block_info[blocks].samples,
+                        block_info[blocks].sumtime.tv_sec,
+                        block_info[blocks].sumtime.tv_nsec,
+                        block_info[blocks].sumsqtime.tv_sec,
+                        block_info[blocks].sumsqtime.tv_nsec);
                 }
               else
                 {
                   // subsequent valid reads
-                  block_info[blocks].samples ++;
+                  block_info[blocks].samples += 1;
                   sum_time(&(block_info[blocks].sumtime), &res);
                   sqr_time(&res, res);
                   sum_time(&(block_info[blocks].sumsqtime), &res);
+                  if (verbosity > 8)
+                    fprintf(stderr, "block: %lli, samples: %i, sumtime: %li.%09li, sumsqtime: %li.%09li\n", 
+                        blocks, 
+                        block_info[blocks].samples,
+                        block_info[blocks].sumtime.tv_sec,
+                        block_info[blocks].sumtime.tv_nsec,
+                        block_info[blocks].sumsqtime.tv_sec,
+                        block_info[blocks].sumsqtime.tv_nsec);
                 }
               
               diff_time(&res, time1, time2);
@@ -745,7 +804,6 @@ main(int argc, char **argv)
             }
             
           next_is_valid = 1;
-          diff_time(&res, time1, time2);
         }
 
       if (res.tv_nsec < 2000000 && res.tv_sec == 0) // very very fast read
@@ -829,11 +887,32 @@ main(int argc, char **argv)
                 {
                   nread = -1; // exit loop, end of device
                 }
+              // TODO: flush system buffers
             }
           else
             break;
         }
     }
+  for(long long i=0; i<blocks; i++)
+    {
+      sqrt_time(&res, block_info[i].sumsqtime);
+      div_time(&res, res, block_info[i].samples);
+      struct timespec avg;
+      div_time(&avg, block_info[i].sumtime, block_info[i].samples);
+      if (res.tv_sec > 1)
+        {
+          fprintf(stderr, "high std dev for block %lli:%3li.%09li  sumsqtime:%5li.%09li, average: %li.%09li\n", 
+              i, 
+              res.tv_sec, 
+              res.tv_nsec,
+              block_info[i].sumsqtime.tv_sec, 
+              block_info[i].sumsqtime.tv_nsec,
+              avg.tv_sec,
+              avg.tv_nsec);
+        }
+    }
+  // TODO: check statistical deviation of sectors
+  // TODO: re-read sectors with high deviation
   clock_gettime(TIMER_TYPE, &timee);
   fprintf(stderr, "sum time: %lis.%lims.%liµs.%lins\n", sumtime.tv_sec,
       sumtime.tv_nsec/1000000,
@@ -850,7 +929,7 @@ main(int argc, char **argv)
       res.tv_nsec%1000);
   sqrt_time(&res, sumsqtime);
   div_time(&res, res, blocks);
-  fprintf(stderr, "std dev: %li.%09li\n", res.tv_sec, res.tv_nsec);
+  fprintf(stderr, "std dev: %li.%09li(s)\n", res.tv_sec, res.tv_nsec);
   fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
       "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
       errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
