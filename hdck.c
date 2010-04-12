@@ -2226,6 +2226,12 @@ main(int argc, char **argv)
         max_std_dev = 0.5;
     }
 
+  if (min_reads > max_reads)
+    {
+      fprintf(stderr, "Warning: min_reads bigger thatn max_reads, correcting\n");
+      max_reads = min_reads;
+    }
+
   struct timespec times, timee; /**< wall clock start and end */
 
   int dev_fd = 0;
