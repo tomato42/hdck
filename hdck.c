@@ -74,6 +74,7 @@ usage()
                                                        " group of sectors\n");
   printf("--sector-times      print time it takes to read each group of"
                                                         " sectors (in µs)\n");
+  printf("--max-sectors NUM   read at most NUM sectors\n");
   printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
   printf("-h, -?              print this message\n");
@@ -182,6 +183,7 @@ main(int argc, char **argv)
   int nosync = 0;
   int noflush = 0;
   off_t filesize = 0;
+  off_t max_sectors = 0;
 
   if (argc == 1)
     {
@@ -204,6 +206,7 @@ main(int argc, char **argv)
         {"nosync", 0, &nosync, 1}, // 8
         {"noverbose", 0, 0, 0}, // 9
         {"noflush", 0, &noflush, 1}, // 10
+        {"max-sectors", 1, 0, 0}, // 11
         {0, 0, 0, 0}
     };
 
@@ -224,6 +227,11 @@ main(int argc, char **argv)
         if (option_index == 9)
           {
             verbosity--;
+            break;
+          }
+        if (option_index == 11)
+          {
+            max_sectors = atoll(optarg);
             break;
           }
         break;
@@ -390,6 +398,8 @@ main(int argc, char **argv)
       // Attempt to free all cached pages related to the opened file
       if (posix_fadvise(dev_fd, 0, 0, POSIX_FADV_DONTNEED) < 0)
         err(1, NULL);
+      if (posix_fadvise(dev_fd, 0, 0, POSIX_FADV_NOREUSE) < 0)
+        err(1, NULL);
     }
 
   sumtime.tv_sec = 0;
@@ -475,7 +485,7 @@ main(int argc, char **argv)
       sum_time(&sumtime, &res);
       sqr_time(&res, res);
       sum_time(&sumsqtime, &res);
-      if (nread == 0)
+      if (nread == 0 || (max_sectors != 0 && blocks * sectors > max_sectors ))
         break;
 
       if (blocks % 1000 == 0 && verbosity >= 0)
