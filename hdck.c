@@ -57,7 +57,7 @@
 #endif
 
 int pagesize = 4096;
-int sectors = 256;
+int sectors = 256; ///< number of sectors read per sample
 int verbosity = 0;
 
 int exclusive = 0; ///< use exclusive file access (O_EXCL)
@@ -154,15 +154,15 @@ usage()
   printf("\n");
   printf("Format for the -o option is presented in the first line of file, block "
       "is a group\n");
-  printf("of 256 sectors (131072 bytes). Consecutive lines in files for -r and -w"
-      " are ranges\n");
+  printf("of %zi sectors (%zi bytes). Consecutive lines in files for -r and -w"
+      " are ranges\n", sectors, sectors * 512);
   printf("of LBAs to scan to.\n");
 }
 
 void
 version(void)
 {
-  printf("hdck 0.2\n");
+  printf("hdck 0.2.1rc1\n");
   printf("License GPLv3+: GNU GPL version 3 or later "
       "<http://gnu.org/licenses/gpl.html>.\n");
   printf("This is free software: you are free to change and redistribute it.\n");
@@ -427,7 +427,7 @@ bi_stdev(struct block_info_t* block_info)
   long double M2 = 0.0;
   long double delta;
 
-  for (int i=0; i < block_info->samples_len; i++)
+  for (size_t i=0; i < block_info->samples_len; i++)
     {
       n++;
       delta = block_info->samples[i] - mean;
@@ -436,6 +436,27 @@ bi_stdev(struct block_info_t* block_info)
     }
   
   return sqrt(M2 / n);
+}
+
+/**
+ * find longest read in samples
+ */
+PURE_FUNCTION
+double
+bi_max(struct block_info_t* block_info)
+{
+  double ret;
+
+  if (block_info->samples_len == 0)
+    return 0.0;
+
+  ret = block_info->samples[0];
+
+  for (size_t i=1; i<block_info->samples_len; i++)
+    if (ret < block_info->samples[i])
+      ret = block_info->samples[i];
+
+  return ret;
 }
 
 /** return relative standard deviation for samples (stdev/mean)
@@ -1240,66 +1261,92 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
   // find uncertain blocks
   for (size_t block_no=offset; block_no < block_info_len; block_no++)
     {
-      if (bi_is_initialised(&block_info[block_no]) &&
-          (
-           !bi_is_valid(&block_info[block_no]) || 
-           bi_num_samples(&block_info[block_no]) < min_reads ||
-           bi_int_rel_stdev(&block_info[block_no]) > min_std_dev ||
-           (soft_delay &&
-            //bi_is_valid(&block_info[block_no]) &&
-            bi_num_samples(&block_info[block_no]) < 2 &&
-            //bi_int_rel_stdev(&block_info[block_no]) <= min_std_dev &&
-            bi_int_average(&block_info[block_no]) > delay
-           ) ||
-           (
-            !soft_delay &&
-            bi_int_average(&block_info[block_no]) > delay
-           )
-          )
-         )
+      if (!bi_is_initialised(&block_info[block_no]))
+        continue;
+
+      if (bi_num_samples(&block_info[block_no]) < min_reads ||
+          !bi_is_valid(&block_info[block_no]))
         {
           block_list[uncertain].off = block_no;
           block_list[uncertain].len = 1;
           uncertain++;
+          continue;
         }
-      else
-        {
-          if (bi_num_samples(&block_info[block_no]) == 1)
-            {
-              double sum;
-              if (block_no < 4)
-                {
-                  sum = bi_average(&block_info[block_no+1]) +
-                    bi_average(&block_info[block_no+2]) +
-                    bi_average(&block_info[block_no+3]) +
-                    bi_average(&block_info[block_no+4]) +
-                    bi_average(&block_info[block_no+5]);
-                }
-              else if (block_no > block_info_len - 3)
-                {
-                  sum = bi_average(&block_info[block_no-1]) +
-                    bi_average(&block_info[block_no-2]) +
-                    bi_average(&block_info[block_no-3]) +
-                    bi_average(&block_info[block_no-4]) +
-                    bi_average(&block_info[block_no-5]);
-                }
-              else
-                {
-                  sum = bi_average(&block_info[block_no-1]) +
-                    bi_average(&block_info[block_no-2]) +
-                    bi_average(&block_info[block_no-3]) +
-                    bi_average(&block_info[block_no+1]) +
-                    bi_average(&block_info[block_no+2]);
-                }
 
-              if (sum/5.0*4 < bi_average(&block_info[block_no]) ||
-                  bi_average(&block_info[block_no]) > delay)
-                {
-                  block_list[uncertain].off = block_no;
-                  block_list[uncertain].len = 1;
-                  uncertain++;
-                }
+      // do not re-read blocks with high std dev if all reads are much
+      // lower than rotational delay
+      if (soft_delay &&
+          (
+           (
+            bi_num_samples(&block_info[block_no]) > 2 &&
+            bi_max(&block_info[block_no]) < delay / 2
+           )
+           ||
+           (
+            bi_num_samples(&block_info[block_no]) > 1 &&
+            bi_max(&block_info[block_no]) < delay  &&
+            bi_int_rel_stdev(&block_info[block_no]) < min_std_dev * 2
+           )
+          )
+         )
+        {
+          continue;
+        }
+
+      if (!soft_delay &&
+          bi_int_average(&block_info[block_no]) > delay)
+        {
+          block_list[uncertain].off = block_no;
+          block_list[uncertain].len = 1;
+          uncertain++;
+          continue;
+        }
+
+      if (bi_num_samples(&block_info[block_no]) == 1)
+        {
+          double sum;
+          if (block_no < 4)
+            {
+              sum = bi_average(&block_info[block_no+1]) +
+                bi_average(&block_info[block_no+2]) +
+                bi_average(&block_info[block_no+3]) +
+                bi_average(&block_info[block_no+4]) +
+                bi_average(&block_info[block_no+5]);
             }
+          else if (block_no > block_info_len - 3)
+            {
+              sum = bi_average(&block_info[block_no-1]) +
+                bi_average(&block_info[block_no-2]) +
+                bi_average(&block_info[block_no-3]) +
+                bi_average(&block_info[block_no-4]) +
+                bi_average(&block_info[block_no-5]);
+            }
+          else
+            {
+              sum = bi_average(&block_info[block_no-1]) +
+                bi_average(&block_info[block_no-2]) +
+                bi_average(&block_info[block_no-3]) +
+                bi_average(&block_info[block_no+1]) +
+                bi_average(&block_info[block_no+2]);
+            }
+
+          if (sum/5.0*4 < bi_average(&block_info[block_no]) ||
+              bi_average(&block_info[block_no]) > delay)
+            {
+              block_list[uncertain].off = block_no;
+              block_list[uncertain].len = 1;
+              uncertain++;
+              continue;
+            }
+        }
+
+      if (bi_int_rel_stdev(&block_info[block_no]) > min_std_dev ||
+          bi_int_average(&block_info[block_no]) > delay)
+        {
+          block_list[uncertain].off = block_no;
+          block_list[uncertain].len = 1;
+          uncertain++;
+          continue;
         }
     }
 
@@ -1808,7 +1855,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
       else if (nread != sectors*512 || 
           (read_e-read_s != 1 && nodirect == 0 && dev_stat_path != NULL) || 
           (read_e-read_s > 4 && nodirect == 1 && dev_stat_path != NULL) || 
-          (read_sec_e-read_sec_s != 256 && 
+          (read_sec_e-read_sec_s != sectors && 
                 nodirect == 0 && dev_stat_path != NULL) || 
           (write_e != write_s && dev_stat_path != NULL))
         {
