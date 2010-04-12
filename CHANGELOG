@@ -1,0 +1,11 @@
+v 0.2 - 2010-04-08
+------------------
+
+ * rading and writing uncertian block ranges to file
+ * writing detailed statistics to file
+ * `background' mode -- lower priority and less confidence for the results
+ * works with single whole disk read, rereads only sectors that are much
+   slower than the neighbours
+ * uses disk RPM for detecting blocks that are consistently reread by the disk
+ * on rereads reads disk cache worth of sectors before the scoring blocks to
+   improve quality of the results
