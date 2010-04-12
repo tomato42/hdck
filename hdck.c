@@ -59,7 +59,7 @@ void
 usage()
 {
   printf("Usage: hdck [OPTIONS]\n");
-  printf("Test hard drive for latent and hidden bad sectors\n");
+  printf("Test hard drive for latent and hidden bad sectors while it's still in use\n");
   printf("\n");
   printf("-f, --file FILE     device file to test\n");
   printf("-x, --exclusive     use exclusive access\n");
@@ -78,6 +78,13 @@ usage()
   printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
   printf("-h, -?              print this message\n");
+  printf("\n");
+  printf("This program can be run on both files and devices, though running it on top of\n");
+  printf("a file is quite pointless. In most cases default settings should be OK. Things to\n");
+  printf("check are --nodirect and --noflush, sometimes it works better without them.\n");
+  printf("When using -x, the program uses different algorithm that trusts the times more\n");
+  printf("and as a result, should achive minimum confidence in less time (by not using re-\n");
+  printf("-reads) (God, I suck at English, rewrite it you moron :/)\n");
 }
 
 /**Return PTR, aligned upward to the next multiple of ALIGNMENT.
