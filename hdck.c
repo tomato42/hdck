@@ -132,6 +132,7 @@ usage()
   printf("--disk-rpm NUM      disk RPM (7200 by default)\n");
   printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
+  printf("--version           write version information\n");
   printf("-h, -?              print this message\n");
   printf("\n");
   printf("This program can be run on both files and devices, though running it on"
@@ -156,6 +157,17 @@ usage()
   printf("of 256 sectors (131072 bytes). Consecutive lines in files for -r and -w"
       " are ranges\n");
   printf("of LBAs to scan to.\n");
+}
+
+void
+version(void)
+{
+  printf("hdck 0.1\n");
+  printf("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n");
+  printf("This is free software: you are free to change and redistribute it.\n");
+  printf("There is NO WARRANTY, to the extent permitted by law.\n");
+  printf("\n");
+  printf("Written by Hubert Kario\n");
 }
 
 /**Return PTR, aligned upward to the next multiple of ALIGNMENT.
@@ -2143,6 +2155,7 @@ main(int argc, char **argv)
         {"disk-rpm", 1, 0, 0}, // 19
         {"bad-sectors", 0, 0, 'w'}, // 20
         {"read-sectors", 0, 0, 'r'}, // 21
+        {"version", 0, 0, 0}, // 22
         {0, 0, 0, 0}
     };
 
@@ -2199,6 +2212,11 @@ main(int argc, char **argv)
               }
             rotational_delay = 60.0/atoll(optarg) * 1000;
             break;
+          }
+        if (option_index == 22)
+          {
+            version();
+            exit(EXIT_SUCCESS);
           }
         break;
 
