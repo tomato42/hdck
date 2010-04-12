@@ -58,13 +58,17 @@ usage()
   printf("\n");
   printf("-f, --file FILE     device file to test\n");
   printf("-x, --exclusive     use exclusive access\n");
-  printf("                    (runs faster, but partitions must be umounted)\n");
-  printf("--nodirect          don't use O_DIRECT and don't flush buffers before reading\n");
+  printf("                    (runs faster, but all partitions must be"
+                                                              " unmounted)\n");
+  printf("--nodirect          don't use O_DIRECT\n");
+  printf("--noflush           don't flush system buffers before reading\n");
   printf("--nosync            don't use O_SYNC\n");
   printf("--noaffinity        don't set CPU affinity to 0th core/CPU\n");
   printf("--nortio            don't change IO priority to real-time\n");
-  printf("--sector-symbols    print symbols representing quality of each group of sectors\n");
-  printf("--sector-times      print time it takes to read each group of sectors (in ns)\n");
+  printf("--sector-symbols    print symbols representing read time of each"
+                                                       " group of sectors\n");
+  printf("--sector-times      print time it takes to read each group of"
+                                                        " sectors (in µs)\n");
   printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
   printf("-h, -?              print this message\n");
@@ -137,6 +141,7 @@ main(int argc, char **argv)
       PRINT_SYMBOLS
   };
   int nosync = 0;
+  int noflush = 0;
 
   if (argc == 1)
     {
@@ -158,6 +163,7 @@ main(int argc, char **argv)
            {"sector-symbols", 0, &sector_times, PRINT_SYMBOLS}, // 7
            {"nosync", 0, &nosync, 1}, // 8
            {"noverbose", 0, 0, 0}, // 9
+           {"noflush", 0, &noflush, 1}, // 10
            {0, 0, 0, 0}
        };
 
@@ -200,7 +206,7 @@ main(int argc, char **argv)
        case 'h':
        case '?':
            usage();
-           exit(EXIT_FAILURE);
+           exit(EXIT_SUCCESS);
            break;
 
        default:
@@ -307,10 +313,14 @@ main(int argc, char **argv)
   ibuf = malloc(sectors*512+pagesize);
   ibuf = ptr_align(ibuf, pagesize);
 
-  // Attempt to free all cached pages related to the opened file
   fsync(dev_fd);
-  if (posix_fadvise(dev_fd, 0, 0, POSIX_FADV_DONTNEED) < 0)
-    err(1, NULL);
+
+  if (!noflush)
+    {
+      // Attempt to free all cached pages related to the opened file
+      if (posix_fadvise(dev_fd, 0, 0, POSIX_FADV_DONTNEED) < 0)
+        err(1, NULL);
+    }
 
   sumtime.tv_sec = 0;
   sumtime.tv_nsec = 0;
