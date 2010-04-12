@@ -1722,6 +1722,11 @@ main(int argc, char **argv)
       struct block_list_t* block_list;
       struct block_info_t* block_data;
 
+      // TODO block re-reading should back-off for a while if there are many
+      // interruptions and decrease the length of blocks read
+      // TODO block re-reading should provide ntermitent expected time and 
+      // status for the re-reading process
+
       if (verbosity >= 0)
         {
 
@@ -1782,8 +1787,6 @@ main(int argc, char **argv)
           if (verbosity > 3)
             fprintf(stderr, "processing block no %zi of length %zi\n", 
                 offset, length);
-          else if ( verbosity >= 0)
-            fprintf(stderr, ".");
 
           block_data = read_blocks(dev_fd, dev_stat_path, offset, length);
           
@@ -1793,9 +1796,13 @@ main(int argc, char **argv)
                 fprintf(stderr, 
                     "\nre-read of block %zi (length %zi) interrupted\n", 
                     offset, length);
+              else fprintf(stderr, "!");// interrupted
+
               block_number++;
               continue;
             }
+          else if (verbosity <= 3 && verbosity >= 0)
+            fprintf(stderr, "."); // OK
 
           for (int i=0; i < length; i++)
             {
@@ -1812,6 +1819,7 @@ main(int argc, char **argv)
             }
 
 
+          // free the block_data structure
           for (int i=0; i< length; i++)
             bi_clear(&block_data[i]);
 
@@ -1892,7 +1900,7 @@ main(int argc, char **argv)
           res.tv_nsec/1000000, res.tv_nsec/1000%1000,
           res.tv_nsec%1000);
     }
-  if (verbosity > 1)
+  if (verbosity > 0)
     {
       long double sum = 0.0;
       long long reads = 0;
