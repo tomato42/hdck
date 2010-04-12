@@ -105,6 +105,20 @@ diff_time(struct timespec *res, struct timespec start, struct timespec end)
 }
 
 void
+sqr_time(struct timespec *res, struct timespec val)
+{
+  // this works because:
+  // for x = 1000*a + b
+  // x^2 = (1000a)^2 + 2*1000a*b + b^2 = 1000*a_2 + b_2, where
+  // a_2 = 1000*a^2 + 2ab + b^2 / 1000
+  // b_2 = b^2 % 1000
+  res->tv_sec = 1000000000 * val.tv_sec * val.tv_sec + 
+                2 * val.tv_nsec * val.tv_sec + 
+                val.tv_nsec * val.tv_nsec / 1000000000;
+  res->tv_nsec = val.tv_nsec * val.tv_nsec % 1000000000;
+}
+
+void
 div_time(struct timespec *res, struct timespec divisor, long long divider)
 {
   res->tv_sec = divisor.tv_sec / divider;
