@@ -514,7 +514,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
   off_t disk_cache = disk_cache_size * 1024 * 1024 /sectors / 512;
 
-  // read additional blocks before the main data to exclude seek time and disk cache 
+  // read additional blocks before the main data to empty disk cache
   if(lseek(fd, ((offset-disk_cache)*sectors*512>=0)?(offset-disk_cache)*sectors*512:0, SEEK_SET) < 0)
     goto interrupted;
 
@@ -526,6 +526,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
         goto interrupted;
     }
 
+  // read additional block before the main data to exclude seek time
   if (offset-1 <= 0)
     if ( lseek(fd, ((offset-1)*sectors*512>=0)?(offset-1)*sectors*512:0, SEEK_SET) < 0)
       goto interrupted;
@@ -538,6 +539,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
     if( lseek(fd, (off_t) 0, SEEK_SET) < 0)
       goto interrupted;
 
+  // start reading main block
   clock_gettime(TIMER_TYPE, &time_end);
 
   while (no_blocks < len)
@@ -557,7 +559,9 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
           write(2, "E", 1);
 
           // omit block
-          if (lseek(fd, (off_t)512*sectors*(no_blocks+1 + offset), SEEK_SET) < 0)
+          if (lseek(fd, 
+                    (off_t)512*sectors*(no_blocks+1 + offset), 
+                    SEEK_SET) < 0)
             goto interrupted;
 
         }
@@ -566,7 +570,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
       block_info[no_blocks].valid = 1;
       diff_time(&res, time_start, time_end);
-      times_time(&res, 1000);
+      times_time(&res, 1000); // block_info is in ms, not ns
       sum_time(&(block_info[no_blocks].sumtime), res);
       sqr_time(&res, res);
       sum_time(&(block_info[no_blocks].sumsqtime), res);
@@ -576,7 +580,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
     }
 
   // read additional two blocks to exclude the probability that there were 
-  // unfinished reads in the mean time while the main was run
+  // unfinished reads or writes in the mean time while the main was run
   nread = read(fd, buffer, sectors*512);
   nread = read(fd, buffer, sectors*512);
 
@@ -585,11 +589,13 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
   if ((read_end-read_start != disk_cache + 1 + 2 + len && 
         nodirect == 0 && 
-        stat_path != NULL)
+        stat_path != NULL
+      )
       || 
       (read_end-read_start > 4 * (disk_cache + 1 + 2 + len) && 
         nodirect == 1 && 
-        stat_path != NULL)
+        stat_path != NULL
+      )
      )
     goto interrupted;
 
@@ -663,7 +669,10 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
       if (block_list[i].off <= ret[ret_len-1].off + ret[ret_len-1].len + 10
          && ret[ret_len-1].len < 10)
         {
-          ret[ret_len-1].len += block_list[i].off - (ret[ret_len-1].off + ret[ret_len-1].len) + 1;
+          ret[ret_len-1].len += block_list[i].off 
+                                - (ret[ret_len-1].off + ret[ret_len-1].len)
+                                + 1;
+
           if (ret[ret_len-1].len + ret[ret_len-1].off >= block_info_len)
             ret[ret_len-1].len = block_info_len - ret[ret_len-1].off;
           continue;
@@ -685,7 +694,7 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
   FILE* handle;
   struct timespec res;
   struct timespec avg;
-  double sdev;
+  double stdev;
 
   handle = fopen(file, "w+");
   if (handle == NULL)
@@ -696,14 +705,14 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
   for(size_t i=0; i< len; i++)
     {
       div_time(&avg, block_info[i].sumtime, block_info[i].samples);
-      sdev = calculate_std_dev(block_info[i].sumtime, block_info[i].sumsqtime,
+      stdev = calculate_std_dev(block_info[i].sumtime, block_info[i].sumsqtime,
                                block_info[i].samples);
 
       fprintf(handle, "%i %li.%li %f %i\n",
           i,
           avg.tv_sec,
           avg.tv_nsec,
-          sdev,
+          stdev,
           block_info[i].samples);
     }
 
@@ -715,7 +724,8 @@ main(int argc, char **argv)
 {
   int c;
   char* filename = NULL;
-  char* dev_stat_path; ///< path to the `stat' file for the corresponding hardware device
+  /// path to the `stat' file for the corresponding hardware device
+  char* dev_stat_path;
   char* output = NULL; ///< output file name
   int sector_times = 0;
   enum {
@@ -995,7 +1005,12 @@ main(int argc, char **argv)
     slow = 0,
     vslow = 0,
     vvslow = 0;  
-  long long read_s=0, write_s=0, read_e=1, write_e=0, read_sec_s=0, read_sec_e=0;
+  long long read_s=0, 
+       write_s=0, 
+       read_e=1, 
+       write_e=0, 
+       read_sec_s=0, 
+       read_sec_e=0;
   int next_is_valid=1;
   int loop=0;
 
@@ -1098,7 +1113,8 @@ main(int argc, char **argv)
                   block_info[blocks].sumsqtime.tv_sec = res.tv_sec;
                   block_info[blocks].sumsqtime.tv_nsec = res.tv_nsec;
                   if (verbosity > 10)
-                    fprintf(stderr, "block: %lli, samples: %i, sumtime: %li.%09li, sumsqtime: %li.%09li\n", 
+                    fprintf(stderr, "block: %lli, samples: %i, sumtime: "
+                        "%li.%09li, sumsqtime: %li.%09li\n", 
                         blocks, 
                         block_info[blocks].samples,
                         block_info[blocks].sumtime.tv_sec,
@@ -1114,7 +1130,8 @@ main(int argc, char **argv)
                   sqr_time(&res, res);
                   sum_time(&(block_info[blocks].sumsqtime), res);
                   if (verbosity > 10)
-                    fprintf(stderr, "block: %lli, samples: %i, sumtime: %li.%09li, sumsqtime: %li.%09li\n", 
+                    fprintf(stderr, "block: %lli, samples: %i, sumtime: "
+                        "%li.%09li, sumsqtime: %li.%09li\n", 
                         blocks, 
                         block_info[blocks].samples,
                         block_info[blocks].sumtime.tv_sec,
@@ -1167,9 +1184,14 @@ main(int argc, char **argv)
           ++vvslow;
           //fprintf(stderr, "%lli\n", blocks * sectors * 1ll);
         }
+
       if (sector_times == PRINT_TIMES)
-        printf("%li r:%lli rs: %lli w:%lli\n",res.tv_nsec/1000+res.tv_sec*1000000, read_s, read_sec_s, write_s); 
-//      fsync(0);
+        printf("%li r:%lli rs: %lli w:%lli\n",
+            res.tv_nsec/1000+res.tv_sec*1000000, 
+            read_s, 
+            read_sec_s, 
+            write_s); 
+
       blocks++;
       abs_blocks++;
       sum_time(&sumtime, res);
@@ -1180,18 +1202,27 @@ main(int argc, char **argv)
         {
           clock_gettime(TIMER_TYPE, &timee);
           diff_time(&res, time1, time2);
+
           float cur_speed;
-          cur_speed = sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
+          cur_speed = sectors * 512 / 1024 * 1.0f / 1024 / 
+            (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
+
           diff_time(&res, times, timee);
+
           float speed;
-          speed = abs_blocks * sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
+          speed = abs_blocks * sectors * 512 / 1024 * 1.0f / 1024 / 
+            (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
+
           float percent;
           if (max_sectors == 0)
             percent = (blocks * sectors * 512.0f) / (filesize * 1.0f);
           else
-            percent = (blocks * sectors * 512.0f) / (max_sectors * sectors * 2.0f);
+            percent = (blocks * sectors * 512.0f) / 
+              (max_sectors * sectors * 2.0f);
+
           long long time_to_go;
           time_to_go = (res.tv_sec*1.0) / percent;
+
           fprintf(stderr,"read %lli sectors, %.3fMiB/s (%.3fMiB/s), %.2f%%, "
               "in %02li:%02li:%02li, expected time: %02lli:%02lli:%02lli\n",
              blocks*sectors,
@@ -1210,17 +1241,26 @@ main(int argc, char **argv)
           // check standard deviation for blocks
           for (int i =0; i < blocks; i++)
             {
-              if (calculate_std_dev(block_info[i].sumtime, block_info[i].sumsqtime, 
+              if (calculate_std_dev(block_info[i].sumtime, 
+                                    block_info[i].sumsqtime, 
                                     block_info[i].samples) > max_std_dev)
                 high_dev++;
               
               if (block_info[i].valid == 0)
                 sum_invalid++;
             }
-          if (loop < min_reads || high_dev/(blocks*1.0) > 0.25 || sum_invalid/(blocks*1.0) > 0.10)
+          if (loop < min_reads || 
+              high_dev/(blocks*1.0) > 0.25 || 
+              sum_invalid/(blocks*1.0) > 0.10)
             {
-              if (verbosity > 1 && !(loop < min_reads) && (high_dev/(blocks*1.0) > 0.25 || sum_invalid/(blocks*1.0) > 0.10))
-                fprintf(stderr, "low confidance for the results, re-reading whole disk\n");
+              if (
+                  verbosity > 1 && 
+                  !(loop < min_reads) && 
+                  ( high_dev/(blocks*1.0) > 0.25 
+                    || sum_invalid/(blocks*1.0) > 0.10)
+                 )
+                fprintf(stderr, "low confidance for the results, "
+                    "re-reading whole disk\n");
 
               blocks=0;
               if (lseek(dev_fd, (off_t)0, SEEK_SET) < 0)
@@ -1234,7 +1274,8 @@ main(int argc, char **argv)
 
           if (loop > max_reads)
             {
-              fprintf(stderr, "Warning; read whole disk %lli times, still can't get high confidence\n", max_reads);
+              fprintf(stderr, "Warning; read whole disk %lli times, still "
+                  "can't get high confidence\n", max_reads);
               break;
             }
         }
