@@ -163,7 +163,8 @@ void
 version(void)
 {
   printf("hdck 0.2\n");
-  printf("License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>.\n");
+  printf("License GPLv3+: GNU GPL version 3 or later "
+      "<http://gnu.org/licenses/gpl.html>.\n");
   printf("This is free software: you are free to change and redistribute it.\n");
   printf("There is NO WARRANTY, to the extent permitted by law.\n");
   printf("\n");
@@ -196,68 +197,6 @@ diff_time(struct timespec *res, struct timespec start, struct timespec end)
     {
       res->tv_sec = end.tv_sec-start.tv_sec;
       res->tv_nsec = end.tv_nsec-start.tv_nsec;
-    }
-  return;
-}
-
-/** multiply time by itself
- * 
- * this works because:
- * for x = 1000*a + b
- * x^2 = (1000a)^2 + 2*1000a*b + b^2 = 1000*a_2 + b_2, where
- * a_2 = 1000*a^2 + 2ab + b^2 / 1000
- * b_2 = b^2 % 1000
- *
- * and log2(1000000000)*2=59.794... < 64
- */
-void
-sqr_time(struct timespec *res, struct timespec val)
-{
-  long double temp=0.0;
-  temp = val.tv_sec + (val.tv_nsec * 1.0L) / 1000000000.0L;
-  temp = temp * temp;
-  
-  res->tv_sec = floorl(temp);
-  temp = temp - floorl(temp);
-  res->tv_nsec = floorl(temp * 1000000000LL);
-/*  res->tv_sec = 1000000000 * val.tv_sec * val.tv_sec + 
-                2 * val.tv_nsec * val.tv_sec + 
-                ((val.tv_nsec * val.tv_nsec) / 1000000000);
-  res->tv_nsec = ((val.tv_nsec * 1LL) * (val.tv_nsec * 1LL)) % 1000000000;*/
-}
-
-/** take square root out of time 
- */
-void
-sqrt_time(struct timespec *res, struct timespec val)
-{
-  res->tv_sec = floor(sqrt(val.tv_sec));
-  res->tv_nsec = (sqrt(val.tv_sec) - res->tv_sec) * 1000000000LL + 
-    floor(sqrt(val.tv_nsec));
-  if (res->tv_nsec >= 1000000000LL)
-    {
-      res->tv_nsec -= 1000000000LL;
-      res->tv_sec += 1;
-    }
-}
-
-void
-div_time(struct timespec *res, struct timespec divisor, long long divider)
-{
-  res->tv_sec = divisor.tv_sec / divider;
-  res->tv_nsec = ((divisor.tv_sec % divider * 1.0l) / divider) * 1000000000LL +
-    divisor.tv_nsec / divider;
-}
-
-void
-sum_time(struct timespec *sum, struct timespec adder)
-{
-  sum->tv_sec += adder.tv_sec;
-  sum->tv_nsec += adder.tv_nsec;
-  if (sum->tv_nsec >= 1000000000LL)
-    {
-      sum->tv_nsec -= 1000000000LL;
-      sum->tv_sec += 1;
     }
   return;
 }
@@ -767,7 +706,7 @@ bi_get_error(struct block_info_t* block_info)
 
 PURE_FUNCTION
 int 
-bitcount (unsigned short int n) 
+bitcount(unsigned short int n) 
 {
 #ifdef __GNUC__
   return __builtin_popcount(n);
@@ -781,22 +720,6 @@ bitcount (unsigned short int n)
   return count;
 #endif
 }
-
-
-double
-calculate_std_dev(struct timespec sumtime, struct timespec sumsqtime, long long n)
-{
-  double ro = 
-      ( time_double(sumsqtime) - 
-        (time_double(sumtime) * time_double(sumtime) / n) 
-      ) * 1.0 / n;
-
-  if (ro <= 0)
-    return 0;
-  else
-    return sqrt(ro);
-}
-
 
 void
 make_real_time(void)
@@ -863,7 +786,7 @@ get_file_size(int dev_fd)
 
 // readlink wrapper
 char *
-readlink_malloc (char *filename)
+readlink_malloc(char *filename)
 {
   int size = 100;
 
@@ -927,8 +850,8 @@ get_file_stat_sys_name(char* filename)
   char* name;
   char* stat_sys_name;
 
-  static char sys_path[] = "/sys/block/";
-  static char sys_stat[] = "/stat";
+  const char sys_path[] = "/sys/block/";
+  const char sys_stat[] = "/stat";
 
   if(stat(filename, &file_stat) == -1)
     err(1, "stat");
