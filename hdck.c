@@ -43,6 +43,7 @@
 #include <sys/syscall.h>
 #include <getopt.h>
 #include <math.h>
+#include <fenv.h>
 #include "ioprio.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 
@@ -52,6 +53,13 @@ int
 sectors = 256;
 int
 verbosity = 0;
+
+struct block_info_t {
+    struct timespec sumtime; ///< sum of all the read times
+    struct timespec sumsqtime; ///< sum of all squared read times
+    int samples; ///< number of samples taken
+    int valid; ///< 0 if data is invalid (because read was interrupted)
+};
 
 /** Print usage information
  */
@@ -191,6 +199,7 @@ main(int argc, char **argv)
   int noflush = 0;
   off_t filesize = 0;
   off_t max_sectors = 0;
+  struct block_info_t* block_info = NULL;
 
   if (argc == 1)
     {
@@ -371,6 +380,7 @@ main(int argc, char **argv)
 
   // get file size
   struct stat file_stat;
+  char* dev_stat_path;
   if (fstat(dev_fd, &file_stat) == -1)
     err(1, "fstat");
   if (S_ISREG(file_stat.st_mode))
@@ -387,11 +397,21 @@ main(int argc, char **argv)
         err(1, "ioctl");
       if (verbosity > 1)
         printf("file size: %lli bytes\n", filesize);
+
+      dev_stat_path = path to the stat file of device in /sys
     }
   else
     {
       printf("%s: %s: File is neither device file nor regular file", __FILE__, "main");
       exit(EXIT_FAILURE);
+    }
+
+  fesetround(2);
+  block_info = calloc(lrintl(filesize*1.0l/512/sectors), sizeof(struct block_info_t));
+  if (block_info == NULL)
+    {
+      printf("Allocation error, tried to allocate %li bytes:\n", lrintl(filesize*1.0l/512/sectors)* sizeof(struct block_info_t));
+      err(1, "calloc");
     }
 
   // get memory alligned pointer (needed for O_DIRECT access)
@@ -422,12 +442,15 @@ main(int argc, char **argv)
     slow = 0,
     vslow = 0,
     vvslow = 0;  
+  long long read_s, write_s, read_e, write_e;
   clock_gettime(TIMER_TYPE, &times);
   while (1)
     {
+      get_read_writes(dev_stat_path, &read_s, &write_s);
       clock_gettime(TIMER_TYPE, &time1);
       nread = read(dev_fd, ibuf, sectors*512);
       clock_gettime(TIMER_TYPE, &time2);
+      get_read_writes(dev_stat_path, &read_e, &write_e);
       if (nread < 0)
         {
           if (errno != EIO)
@@ -448,6 +471,20 @@ main(int argc, char **argv)
         }
       else
         diff_time(&res, time1, time2);
+
+      if(read_e-read_s-1 != 0 || write_e != write_s)
+        {
+          block_info[blocks].valid = 0;
+        }
+      else
+        {
+          block_info[blocks].valid = 1;
+          block_info[blocks].sumtime = res;
+          sqr_time(&res, res);
+          block_info[blocks].sumsqtime = res;
+          diff_time(&res, time1, time2);
+          block_info[blocks].samples++;
+        }
 
       if (res.tv_nsec < 2000000 && res.tv_sec == 0) // very very fast read
         {
@@ -492,30 +529,34 @@ main(int argc, char **argv)
       sum_time(&sumtime, &res);
       sqr_time(&res, res);
       sum_time(&sumsqtime, &res);
-      if (nread == 0 || (max_sectors != 0 && blocks * sectors > max_sectors ))
-        break;
 
       if (blocks % 1000 == 0 && verbosity >= 0)
         {
           clock_gettime(TIMER_TYPE, &timee);
+          diff_time(&res, time1, time2);
+          float cur_speed;
+          cur_speed = sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
           diff_time(&res, times, timee);
           float speed;
           speed = blocks * sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
           float percent;
-          percent =  (blocks * sectors * 512.0f) / (filesize * 1.0f);
+          if (max_sectors == 0)
+            percent = (blocks * sectors * 512.0f) / (filesize * 1.0f);
+          else
+            percent = (blocks * sectors * 512.0f) / (max_sectors * sectors * 2.0f);
           long long time_to_go;
           time_to_go = (res.tv_sec*1.0) / percent;
-          fprintf(stderr,"read %lli sectors (%.3fMiB/s), %.2f%%, in %02li:%02li:%02li, expected time: %02lli:%02lli:%02lli\n",
+          fprintf(stderr,"read %lli sectors, %.3fMiB/s (%.3fMiB/s), %.2f%%, in %02li:%02li:%02li, expected time: %02lli:%02lli:%02lli\n",
              blocks*sectors,
+             cur_speed,
              speed,
              percent*100,
              res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
              time_to_go/3600, time_to_go/60%60, time_to_go%60);
         }
 
- /*     printf("%lis:%lims:%liµs:%lins\n", res.tv_sec,
-         res.tv_nsec/1000000, res.tv_nsec/1000%1000,
-         res.tv_nsec%1000, res.tv_nsec); */
+      if (nread == 0 || (max_sectors != 0 && blocks * sectors >= max_sectors ))
+        break;
     }
   clock_gettime(TIMER_TYPE, &timee);
   fprintf(stderr, "sum time: %lis.%lims.%liµs.%lins\n", sumtime.tv_sec,
