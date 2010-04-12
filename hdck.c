@@ -2148,6 +2148,7 @@ main(int argc, char **argv)
   slow=0;
   vslow=0;
   vvslow=0;
+  errors=0;
   for (int i=0; i< blocks; i++)
     {
       if (bi_is_valid(&block_info[i]) == 0)
@@ -2159,6 +2160,8 @@ main(int argc, char **argv)
         avg = bi_average(&block_info[i]);
       else
         avg = bi_trunc_average(&block_info[i], 0.25);
+
+      errors += bi_get_error(&block_info[i]);
 
       if (avg < 2) // very very fast read
         {
@@ -2195,8 +2198,8 @@ main(int argc, char **argv)
       fprintf(stderr, "Number of invalid measures because of interrupted "
           "reads: %lli\n", sum_invalid);
       fprintf(stderr, "read statistics:\n<2ms: %lli\n<5ms: %lli\n<10ms: %lli\n"
-          "<25ms: %lli\n<50ms: %lli\n<80ms: %lli\n>80ms: %lli\n",
-        vvfast, vfast, fast, normal, slow, vslow, vvslow);
+          "<25ms: %lli\n<50ms: %lli\n<80ms: %lli\n>80ms: %lli\nERR: %lli\n",
+        vvfast, vfast, fast, normal, slow, vslow, vvslow, errors);
     }
 
   if (verbosity > 2)
@@ -2208,6 +2211,7 @@ main(int argc, char **argv)
       slow=0;
       vslow=0;
       vvslow=0;
+      errors=0;
 
       long double raw_sum = 0.0;
       long long samples = 0;
@@ -2221,6 +2225,7 @@ main(int argc, char **argv)
 
               double avg = bi_get_times(&block_info[i])[j];
               partial_sum += avg;
+              errors += bi_get_error(&block_info[i]);
               samples++;
 
               if (avg < 2) // very very fast read
