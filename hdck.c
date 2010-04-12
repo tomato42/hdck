@@ -716,20 +716,30 @@ main(int argc, char **argv)
           // invalidate next read block (to ignore seeking)
           next_is_valid = 0;
         }
-      else
+      else // when the read was correct
         {
-          diff_time(&res, time1, time2);
           if (block_info[blocks].valid == 0 || (block_info[blocks].valid == 1 && next_is_valid == 1))
             {
               if (block_info[blocks].valid == 0 && next_is_valid == 1)
-                block_info[blocks].samples = 1;
+                {
+                  // first valid read
+                  block_info[blocks].samples = 1;
+                  block_info[blocks].sumtime = res;
+                  sqr_time(&res, res);
+                  block_info[blocks].sumsqtime = res;
+                }
               else
-                block_info[blocks].samples ++;
+                {
+                  // subsequent valid reads
+                  block_info[blocks].samples ++;
+                  sum_time(&(block_info[blocks].sumtime), &res);
+                  sqr_time(&res, res);
+                  sum_time(&(block_info[blocks].sumsqtime), &res);
+                }
+              
+              diff_time(&res, time1, time2);
 
               block_info[blocks].valid = next_is_valid;
-              sum_time(&(block_info[blocks].sumtime), &res);
-              sqr_time(&res, res);
-              sum_time(&(block_info[blocks].sumsqtime), &res);
             }
             
           next_is_valid = 1;
