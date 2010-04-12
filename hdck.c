@@ -74,9 +74,10 @@ size_t disk_cache_size = 32;
 /// information about a single block (256 sectors by default)
 struct block_info_t {
     double* samples; ///< measurements for the block
-    short int samples_len; ///< number of samples taken
+    size_t samples_len; ///< number of samples taken
     short int valid; ///< 0 if data is invalid (because read was interrupted)
-    unsigned short int error; ///< number of IO errors that occured while reading the block
+    unsigned short int error; ///< number of IO errors that occured while reading
+                              /// the block
 };
 
 /// list of sectors to read
@@ -91,38 +92,50 @@ void
 usage()
 {
   printf("Usage: hdck [OPTIONS]\n");
-  printf("Test hard drive for latent and hidden bad sectors while it's still in use\n");
+  printf("Test hard drive for latent and hidden bad sectors\n");
   printf("\n");
   printf("-f, --file FILE     device file to test\n");
   printf("-x, --exclusive     use exclusive access\n");
   printf("                    (runs faster, but all partitions must be"
                                                               " unmounted)\n");
-  printf("-o, --outfile       output file for the detailed statistics \n");
+  printf("-b, --background    shorthand for --noaffinity, --nortio, --nort\n");
+  printf("-o, --outfile FILE  output file for the detailed statistics \n");
   printf("--nodirect          don't use O_DIRECT\n");
   printf("--noflush           don't flush system buffers before reading\n");
   printf("--nosync            don't use O_SYNC\n");
   printf("--noaffinity        don't set CPU affinity to 0th core/CPU\n");
   printf("--nortio            don't change IO priority to real-time\n");
+  printf("--nort              don't make the process real-time\n");
   printf("--sector-symbols    print symbols representing read time of each"
                                                        " group of sectors\n");
   printf("--sector-times      print time it takes to read each group of"
                                                         " sectors (in µs)\n");
-  printf("--min-reads         minimal number of valid reads for a sector\n");
-  printf("--max-reads         maximal number of re-reads for a sector\n");
-  printf("--max-std-deviation maximal stdandard deviation for a sector to be "
-                                                        "considered valid\n");
+  printf("--min-reads NUM     minimal number of valid reads for a sector\n");
+  printf("--max-reads NUM     maximal number of re-reads for a sector\n");
+  printf("--max-std-deviation NUM minimal relative stdandard deviation for a sector "
+      "to be considered valid\n");
   printf("--max-sectors NUM   read at most NUM sectors\n");
   printf("--disk-cache NUM    size of the on-board disk cache (32MiB default)\n");
   printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
   printf("-h, -?              print this message\n");
   printf("\n");
-  printf("This program can be run on both files and devices, though running it on top of\n");
-  printf("a file is quite pointless. In most cases default settings should be OK. Things to\n");
+  printf("This program can be run on both files and devices, though running it on"
+      " top of\n");
+  printf("a file is quite pointless. In most cases default settings should be OK."
+      " Things to\n");
   printf("check are --nodirect and --noflush.\n");
-  printf("When using -x, the program uses different algorithm that trusts the times more\n");
-  printf("and as a result, should achive minimum confidence in less time (by not using re-\n");
+  printf("When using -x, the program trusts the sector times more\n");
+  printf("and as a result, should achive minimum confidence in less time "
+      "(by not using re-\n");
   printf("-reads, much)\n");
+  printf("\n");
+  printf("Default settings:\n");
+  printf("min-reads: 3, max-reads: 10, max-std-deviation: 0.5\n");
+  printf("Exclusive settings:\n");
+  printf("min-reads: 2, max-reads: 5, max-std-deviation: 0.25\n");
+  printf("Background settings:\n");
+  printf("min-reads: 3, max-reads: 20, max-std-deviation: 0.5\n");
 }
 
 /**Return PTR, aligned upward to the next multiple of ALIGNMENT.
@@ -760,7 +773,8 @@ get_file_size(int dev_fd)
     }
   else
     {
-      printf("%s: %s: File is neither device file nor regular file", __FILE__, "main");
+      printf("%s: %s: File is neither device file nor regular file", 
+          __FILE__, "main");
       exit(EXIT_FAILURE);
     }
   return filesize;
@@ -1264,8 +1278,8 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
 }
 
 void
-perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_info, size_t block_info_size, int re_reads,
-    double max_std_dev, short int min_reads)
+perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_info,
+    size_t block_info_size, int re_reads, double max_std_dev, short int min_reads)
 {
   struct block_list_t* block_list;
   struct block_info_t* block_data;
@@ -1273,9 +1287,18 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
   int max_len = 4;
 
   uint16_t correct_reads = 0xffff;
+  off_t blocks_read = 0;
+  off_t total_blocks = 0;
+
+  struct timespec start_time, end_time, res;
+
+  off_t disk_cache = disk_cache_size * 1024 * 1024 /sectors / 512;
 
   for(int tries=0; tries < re_reads; tries++)
     {
+      blocks_read = 0;
+      total_blocks = 0;
+      clock_gettime(TIMER_TYPE, &start_time);
 
       // TODO block re-reading should provide intermitent expected time and 
       // status for the re-reading process
@@ -1295,6 +1318,7 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
             }
 
           size_t block_number=0;
+          // end of list is marked by NULL, NULL
           while (!(block_list[block_number].off == 0 && 
               block_list[block_number].len == 0))
             {
@@ -1331,6 +1355,9 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
       if (block_list == NULL)
         break;
 
+      total_blocks = 0;
+      for (size_t i=0; !(block_list[i].off==0 && block_list[i].len==0); i++)
+        total_blocks += block_list[i].len + disk_cache + 3;
 
       size_t block_number=0;
       while (!(block_list[block_number].off == 0 && 
@@ -1344,20 +1371,48 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
                 offset, length);
 
           block_data = read_blocks(dev_fd, dev_stat_path, offset, length);
+
+          blocks_read += length + disk_cache + 3;
           
-          if (block_data == NULL || (block_data != NULL && !bi_is_valid(&block_data[0])))
+          if (block_data == NULL || 
+              (block_data != NULL && !bi_is_valid(&block_data[0])))
             {
               if (verbosity > 2)
                 fprintf(stderr, 
                     "\nre-read of block %zi (length %zi) interrupted\n", 
                     offset, length);
-              else fprintf(stderr, "!");// interrupted
+              else if (verbosity > 0)
+                fprintf(stderr, "!");// interrupted
 
               block_number++;
             }
-          else if (verbosity <= 3 && verbosity >= 0)
+          else if (verbosity <= 3 && verbosity > 0)
             fprintf(stderr, "."); // OK
 
+          // print statistics
+          if (verbosity >= 0 && (block_number % 10 == 0 || blocks_read % 32 == 0))
+            {
+              clock_gettime(TIMER_TYPE, &end_time);
+              diff_time(&res, start_time, end_time);
+
+              double percent;
+              percent = blocks_read * 1.0/total_blocks;
+
+              long long time_to_go;
+              time_to_go = time_double(res) / percent;
+              if (verbosity > 0)
+                fprintf(stderr, "\n");
+
+              fprintf(stderr, "reread %i of %i, %.2f%% done "
+                  "in %02li:%02li:%02li, expected time:"
+                  "%02lli:%02lli:%02lli\n",
+                  tries+1, re_reads,
+                  percent * 100,
+                  res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
+                  time_to_go/3600, time_to_go/60%60, time_to_go%60);
+            }
+
+          // save whatever the read was successful
           if (block_data != NULL && bi_is_valid(&block_data[0]))
             {
               correct_reads <<= 1;
@@ -1368,10 +1423,13 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
               correct_reads <<= 1;
             }
 
+          // if last reads were unsuccessful, wait a second
           if (bitcount(correct_reads) == 0)
             {
               sleep(1); // let the reads and writes finish
             }
+          // if less than 12 out of 16 last reads were successful
+          // reduce the amount of blocks to read
           else if (bitcount(correct_reads) < 12)
             {
               if (max_len > 2) // divide the max len by half, recreate block_list
@@ -1387,9 +1445,15 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
                   if (block_list == NULL)
                     break;
 
+                  total_blocks = blocks_read;
+                  for (size_t i=0; !(block_list[i].off==0 && block_list[i].len==0);
+                      i++)
+                    total_blocks += block_list[i].len + disk_cache + 3;
+
                   block_number = 0;
                 } 
             }
+          // if all reads were successful, double the amount of blocks read
           else if (bitcount(correct_reads) == 16)
             {
               // don't read more than 128 MiB at a time
@@ -1408,6 +1472,11 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
 
                   if (block_list == NULL)
                     err(1, "re_read");
+
+                  total_blocks = blocks_read;
+                  for (size_t i=0; !(block_list[i].off==0 && block_list[i].len==0);
+                      i++)
+                    total_blocks += block_list[i].len + disk_cache + 3;
 
                   block_number = 0;
                 }
@@ -1428,7 +1497,7 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
           free(block_data);
           block_number++;
         }
-      if (verbosity <= 3 && verbosity >= 0)
+      if (verbosity <= 3 && verbosity > 0)
         fprintf(stderr, "\n");
 
       if (block_list)
@@ -1455,6 +1524,7 @@ main(int argc, char **argv)
   off_t filesize = 0;
   off_t max_sectors = 0;
   struct block_info_t* block_info = NULL;
+  int no_rt = 0;
 
   if (argc == 1)
     {
@@ -1482,10 +1552,12 @@ main(int argc, char **argv)
         {"max-std-deviation", 1, 0, 0}, // 14
         {"max-reads", 1, 0, 0}, // 15
         {"disk-cache", 1, 0, 0}, // 16
+        {"nort", 0, &no_rt, 1}, // 17
+        {"background", 0, 0, 'b'}, // 18
         {0, 0, 0, 0}
     };
 
-    c = getopt_long(argc, argv, "f:xhvo:?",
+    c = getopt_long(argc, argv, "f:xhbvo:?",
              long_options, &option_index);
     if (c == -1)
       break;
@@ -1551,6 +1623,13 @@ main(int argc, char **argv)
         if (verbosity > 5) printf("option o with value '%s'\n", optarg);
         break;
 
+    case 'b':
+        max_reads = 20;
+        noaffinity = 1;
+        nortio = 1;
+        no_rt = 1;
+        break;
+
     case 'h':
     case '?':
         usage();
@@ -1614,7 +1693,8 @@ main(int argc, char **argv)
   off_t number_of_blocks;
 
   // make the process real-time
-  make_real_time();
+  if (!no_rt)
+    make_real_time();
 
   // make the process run on single core
   if (!noaffinity)
@@ -1781,7 +1861,6 @@ main(int argc, char **argv)
 
       if (nread < 0) // on error
         {
-          // TODO save that an error occured when reading the block
           if (errno != EIO)
             err(1, NULL);
           else
