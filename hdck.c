@@ -27,12 +27,15 @@
  */
 
 #define _GNU_SOURCE 1
+#define _FILE_OFFSET_BITS 64
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <linux/fs.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <err.h>
@@ -46,12 +49,13 @@
 int
 pagesize = 4096;
 int
-sectors = 255;
+sectors = 256;
 int
 verbosity = 0;
 
 /** Print usage information
  */
+void
 usage()
 {
   printf("Usage: hdck [OPTIONS]\n");
@@ -177,6 +181,7 @@ main(int argc, char **argv)
   };
   int nosync = 0;
   int noflush = 0;
+  off_t filesize = 0;
 
   if (argc == 1)
     {
@@ -276,7 +281,7 @@ main(int argc, char **argv)
 
   int dev_fd = 0;
   char *ibuf;
-  ssize_t nread;
+  off_t nread;
 
   // make the process real-time
   struct sched_param sp;
@@ -284,12 +289,15 @@ main(int argc, char **argv)
   if (sched_setscheduler(0,SCHED_FIFO,&sp) < 0)
     err(1, "scheduler");
 
-  // make the process run on single core
-  cpu_set_t cpu_set;
-  CPU_ZERO(&cpu_set); // zero the CPU set
-  CPU_SET(0, &cpu_set); // add first cpu to the set
-  if (sched_setaffinity(0,sizeof(cpu_set_t), &cpu_set) <0)
-    err(1, "affinity");
+  if (!noaffinity)
+    {
+      // make the process run on single core
+      cpu_set_t cpu_set;
+      CPU_ZERO(&cpu_set); // zero the CPU set
+      CPU_SET(0, &cpu_set); // add first cpu to the set
+      if (sched_setaffinity(0,sizeof(cpu_set_t), &cpu_set) <0)
+        err(1, "affinity");
+    }
 
   if (!nortio)
     {
@@ -315,6 +323,7 @@ main(int argc, char **argv)
       if (verbosity > 5)
         printf("NOT setting O_DIRECT on file\n");
     }
+
   if (!nosync)
     {
       if (verbosity > 5)
@@ -343,6 +352,31 @@ main(int argc, char **argv)
   if (dev_fd < 0)
     {
       err(1, NULL);
+    }
+
+  // get file size
+  struct stat file_stat;
+  if (fstat(dev_fd, &file_stat) == -1)
+    err(1, "fstat");
+  if (S_ISREG(file_stat.st_mode))
+    {
+      filesize = file_stat.st_size;
+      if (verbosity > 1)
+        {
+          printf("file size: %lli B\n", file_stat.st_size);
+        }
+    }
+  else if (S_ISBLK(file_stat.st_mode))
+    {
+      if (ioctl(dev_fd, BLKGETSIZE64, &filesize) == -1)
+        err(1, "ioctl");
+      if (verbosity > 1)
+        printf("file size: %lli bytes\n", filesize);
+    }
+  else
+    {
+      printf("%s: %s: File is neither device file nor regular file", __FILE__, "main");
+      exit(EXIT_FAILURE);
     }
 
   // get memory alligned pointer (needed for O_DIRECT access)
@@ -450,9 +484,16 @@ main(int argc, char **argv)
           diff_time(&res, times, timee);
           float speed;
           speed = blocks * sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
-          fprintf(stderr,"read %lli sectors (%.3fMiB/s)\n",
+          float percent;
+          percent =  (blocks * sectors * 512.0f) / (filesize * 1.0f);
+          long long time_to_go;
+          time_to_go = (res.tv_sec*1.0) / percent;
+          fprintf(stderr,"read %lli sectors (%.3fMiB/s), %.2f%%, in %02li:%02li:%02li, expected time: %02lli:%02lli:%02lli\n",
              blocks*sectors,
-             speed);
+             speed,
+             percent*100,
+             res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
+             time_to_go/3600, time_to_go/60%60, time_to_go%60);
         }
 
  /*     printf("%lis:%lims:%liµs:%lins\n", res.tv_sec,
