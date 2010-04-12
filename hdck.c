@@ -47,6 +47,7 @@
 #include <fenv.h>
 #include <string.h>
 #include <assert.h>
+#include <stdint.h>
 #include "ioprio.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 
@@ -59,6 +60,7 @@ int nodirect = 0; ///< don't use O_DIRECT access
 int noaffinity = 0; ///< don't set CPU affinity
 int nortio = 0; ///< don't change process scheduling to RT
 int write_individual_times_to_file = 1; ///< TODO - cmd option
+int bad_sector_warning = 1; ///< whatever the user was warned about badsectors
 
 /// minimal number of reads for a sector to be qualified as valid
 long long min_reads = 0; 
@@ -74,6 +76,7 @@ struct block_info_t {
     double* samples; ///< measurements for the block
     short int samples_len; ///< number of samples taken
     short int valid; ///< 0 if data is invalid (because read was interrupted)
+    unsigned short int error; ///< number of IO errors that occured while reading the block
 };
 
 /// list of sectors to read
@@ -249,6 +252,32 @@ time_double(struct timespec ts)
 }
 
 /**
+ * reset the block_info struct
+ * does not reset number of block errors!
+ */
+void
+bi_clear(struct block_info_t* block_info)
+{
+  if (block_info->samples)
+    free(block_info->samples);
+
+  block_info->samples = NULL;
+  block_info->samples_len = 0;
+  block_info->valid = 0;
+}
+
+/** initalises the block_info_t struct
+ */
+void
+bi_init(struct block_info_t* block_info)
+{
+  block_info->samples = NULL;
+  block_info->samples_len = 0;
+  block_info->valid = 0;
+  block_info->error = 0;
+}
+
+/**
  * add time (in ms) to samples inside block_info
  */
 void
@@ -308,7 +337,29 @@ bi_add(struct block_info_t* sum, struct block_info_t* adder)
       sum->samples_len += adder->samples_len;
     }
 
+  sum->error += adder->error;
+
   return;
+}
+
+/** add one block_info to another, only if their state matches
+ */
+void
+bi_add_valid(struct block_info_t* sum, struct block_info_t* adder)
+{
+  if ((sum->valid && adder->valid) || ((!sum->valid) && (!adder->valid)))
+    {
+      bi_add(sum, adder);
+    }
+  else if (sum->valid && !adder->valid)
+    {
+      sum->error += adder->error;
+    }
+  else
+    {
+      bi_clear(sum);
+      bi_add(sum, adder);
+    }
 }
 
 /** removes last sample
@@ -326,30 +377,6 @@ bi_remove_last(struct block_info_t* block_info)
     }
 }
 
-
-/**
- * reset the block_info struct
- */
-void
-bi_clear(struct block_info_t* block_info)
-{
-  if (block_info->samples)
-    free(block_info->samples);
-
-  block_info->samples = NULL;
-  block_info->samples_len = 0;
-  block_info->valid = 0;
-}
-
-/** initalises the block_info_t struct
- */
-void
-bi_init(struct block_info_t* block_info)
-{
-  block_info->samples = NULL;
-  block_info->samples_len = 0;
-  block_info->valid = 0;
-}
 
 /** check if block_info is valid
  */
@@ -629,6 +656,39 @@ bi_int_rel_stdev(struct block_info_t* block_info)
   return bi_trunc_rel_stdev(block_info, 0.25);
 }
 
+/** 
+ * set that an error occured while reading the block
+ */
+void
+bi_add_error(struct block_info_t* block_info)
+{
+  block_info->error++;
+}
+
+/** get number of errors that occured while reading the block
+ */
+int
+bi_get_error(struct block_info_t* block_info)
+{
+  return block_info->error;
+}
+
+int 
+bitcount (unsigned short int n) 
+{
+#ifdef __GNUC__
+  return __builtin_popcount(n);
+#else
+  int count = 0;
+  while (n) 
+    {
+      count += n & 0x1u;
+      n >>= 1;
+    }
+  return count;
+#endif
+}
+
 
 double
 calculate_std_dev(struct timespec sumtime, struct timespec sumsqtime, long long n)
@@ -886,6 +946,9 @@ get_read_writes(char* filepath,
   return 0;
 }
 
+/**
+ * reads only the blocks between offset and offset+len
+ */
 struct block_info_t*
 read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 {
@@ -895,6 +958,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
   long long read_start = 0, read_sectors_s = 0, write_start = 0,
             read_end = 0, read_sectors_e = 0, write_end = 0;
   struct block_info_t* block_info;
+  int bad_sectors = 0;
   char* buffer;
   char* buffer_free;
   off_t nread;
@@ -925,7 +989,22 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
     {
       nread = read(fd, buffer, sectors*512);
 
-      if (nread != sectors*512)
+      if (nread < 0)
+        {
+          fprintf(stderr, "E");
+          bad_sectors = 1;
+          
+          if (bad_sector_warning)
+            {
+              fprintf(stderr, "BAD SECTORS reads may not be accurate!\n");
+              bad_sector_warning = 0;
+            }
+
+          // omit block
+          if (lseek(fd, (off_t)sectors*512, SEEK_CUR) < 0)
+            goto interrupted;
+        }
+      else if (nread != sectors*512)
         goto interrupted;
     }
 
@@ -935,7 +1014,22 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
       goto interrupted;
 
   nread = read(fd, buffer, sectors*512);
-  if (nread != sectors*512)
+  if (nread < 0)
+    {
+      fprintf(stderr, "E");
+      bad_sectors = 1;
+
+      if (bad_sector_warning)
+        {
+          fprintf(stderr, "BAD SECTORS reds may not be accurate!\n");
+          bad_sector_warning = 0;
+        }
+
+      // omit block
+      if (lseek(fd, sectors*512, SEEK_CUR) < 0)
+        goto interrupted;
+    }
+  else if (nread != sectors*512)
     goto interrupted;
 
   if (offset == 0)
@@ -970,24 +1064,43 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
           write(2, "E", 1);
 
+          bi_add_error(&block_info[no_blocks]);
+          bad_sectors = 1;
+
+          if (bad_sector_warning)
+            {
+              fprintf(stderr, "BAD SECTORS reads may not be accurate!\n");
+              bad_sector_warning = 0;
+            }
+
           // omit block
           if (lseek(fd, 
                     (off_t)512*sectors*(no_blocks+1 + offset), 
                     SEEK_SET) < 0)
             goto interrupted;
 
+          no_blocks++;
+
         }
       else if (nread != sectors*512)
-        goto interrupted;
+        {
+          bad_sectors = 1;
+          if (lseek(fd, (off_t)512*sectors*(no_blocks+1 + offset),
+                    SEEK_SET) < 0)
+            goto interrupted;
+          no_blocks++;
+        }
+      else
+        {
+          bi_make_valid(&block_info[no_blocks]);
 
-      bi_make_valid(&block_info[no_blocks]);
+          diff_time(&res, time_start, time_end);
+          times_time(&res, 1000); // block_info is in ms, not ns
 
-      diff_time(&res, time_start, time_end);
-      times_time(&res, 1000); // block_info is in ms, not ns
+          bi_add_time(&block_info[no_blocks], time_double(res));
 
-      bi_add_time(&block_info[no_blocks], time_double(res));
-
-      no_blocks++;
+          no_blocks++;
+        }
     }
 
   // read additional two blocks to exclude the probability that there were 
@@ -998,7 +1111,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
   if (stat_path != NULL)
     get_read_writes(stat_path, &read_end, &read_sectors_e, &write_end);
 
-  if ((read_end-read_start != disk_cache + 1 + 2 + len && 
+  if (((read_end-read_start != disk_cache + 1 + 2 + len && 
         nodirect == 0 && 
         stat_path != NULL
       )
@@ -1006,9 +1119,14 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
       (read_end-read_start > 4 * (disk_cache + 1 + 2 + len) && 
         nodirect == 1 && 
         stat_path != NULL
-      )
+      ))
+      && bad_sectors == 0
      )
     goto interrupted;
+
+  if (bad_sectors)
+    for(size_t i=0; i < len; i++)
+      bi_make_invalid(&block_info[i]);
 
   free(buffer_free);
   return(block_info);
@@ -1029,22 +1147,26 @@ interrupted:
  * @param min_reads minimal number of reads for a block to be considered
  * checked
  * @param glob how close sectors have to be near them to be bundled together
+ * @param offset minimal address to consider
  */
 struct block_list_t*
 find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
-    float min_std_dev, int min_reads, int glob)
+    float min_std_dev, int min_reads, int glob, off_t offset)
 {
   struct block_list_t* block_list;
   struct block_list_t* ret;
   size_t uncertain = 0;
   size_t ret_len = 0;
 
+  if (offset > block_info_len || offset < 0)
+    return NULL;
+
   block_list = calloc(sizeof(struct block_list_t), block_info_len);
   if (block_list == NULL)
     err(1, "find_uncertain_blocks");
 
   // find uncertain blocks
-  for (size_t block_no=0; block_no < block_info_len; block_no++)
+  for (size_t block_no=offset; block_no < block_info_len; block_no++)
     {
       if (bi_is_valid(&block_info[block_no]) == 0 || 
           bi_num_samples(&block_info[block_no]) < min_reads ||
@@ -1139,6 +1261,180 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
     }
 
   fclose(handle);
+}
+
+void
+perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_info, size_t block_info_size, int re_reads,
+    double max_std_dev, short int min_reads)
+{
+  struct block_list_t* block_list;
+  struct block_info_t* block_data;
+
+  int max_len = 4;
+
+  uint16_t correct_reads = 0xffff;
+
+  for(int tries=0; tries < re_reads; tries++)
+    {
+
+      // TODO block re-reading should provide intermitent expected time and 
+      // status for the re-reading process
+
+      // print statistics before processing
+      if (verbosity >= 0)
+        {
+
+          block_list = find_uncertain_blocks(
+              block_info, block_info_size, max_std_dev, min_reads, 1, 0);
+
+          if (block_list == NULL)
+            {
+              if (verbosity >2)
+                fprintf(stderr, "no uncertain blocks found\n");
+              break;
+            }
+
+          size_t block_number=0;
+          while (!(block_list[block_number].off == 0 && 
+              block_list[block_number].len == 0))
+            {
+              if (verbosity > 2)
+                {
+                  size_t start = block_list[block_number].off,
+                        end = start + block_list[block_number].len;
+
+                  for(size_t i= start; i< end; i++)
+                    {
+                      double stdev = bi_int_rel_stdev(&block_info[i]);
+
+                      fprintf(stderr, "rel std dev for block %zi: %3.9f"
+                          ", average: %f, valid: %i, samples: %i\n", 
+                          i, 
+                          stdev,
+                          bi_average(&block_info[i]),
+                          bi_is_valid(&block_info[i]),
+                          bi_num_samples(&block_info[i]));
+                    }
+
+                }
+              block_number++;
+            }
+
+          fprintf(stderr, "re-reading %zi uncertain blocks\n", block_number);
+          free(block_list);
+        }
+
+
+      block_list = find_uncertain_blocks(
+          block_info, block_info_size, max_std_dev, min_reads, max_len * 2, 0);
+
+      if (block_list == NULL)
+        break;
+
+
+      size_t block_number=0;
+      while (!(block_list[block_number].off == 0 && 
+          block_list[block_number].len == 0))
+        {
+          size_t offset, length;
+          offset = block_list[block_number].off;
+          length = block_list[block_number].len;
+          if (verbosity > 3)
+            fprintf(stderr, "processing block no %zi of length %zi\n", 
+                offset, length);
+
+          block_data = read_blocks(dev_fd, dev_stat_path, offset, length);
+          
+          if (block_data == NULL || (block_data != NULL && !bi_is_valid(&block_data[0])))
+            {
+              if (verbosity > 2)
+                fprintf(stderr, 
+                    "\nre-read of block %zi (length %zi) interrupted\n", 
+                    offset, length);
+              else fprintf(stderr, "!");// interrupted
+
+              block_number++;
+            }
+          else if (verbosity <= 3 && verbosity >= 0)
+            fprintf(stderr, "."); // OK
+
+          if (block_data != NULL && bi_is_valid(&block_data[0]))
+            {
+              correct_reads <<= 1;
+              correct_reads |= 0x1u;
+            }
+          else
+            {
+              correct_reads <<= 1;
+            }
+
+          if (bitcount(correct_reads) == 0)
+            {
+              sleep(1); // let the reads and writes finish
+            }
+          else if (bitcount(correct_reads) < 12)
+            {
+              if (max_len > 2) // divide the max len by half, recreate block_list
+                {
+                  max_len /= 2;
+                  off_t beginning = block_list[block_number].off;
+                  free(block_list);
+
+                  block_list = find_uncertain_blocks(
+                      block_info, block_info_size, max_std_dev,
+                      min_reads, max_len, beginning);
+
+                  if (block_list == NULL)
+                    break;
+
+                  block_number = 0;
+                } 
+            }
+          else if (bitcount(correct_reads) == 16)
+            {
+              // don't read more than 128 MiB at a time
+              if (max_len < 64 * 1024 * 1024 / sectors / 512) 
+                {
+                  max_len *= 2;
+                  off_t beginning = block_list[block_number].off;
+                  free(block_list);
+
+                  block_list = find_uncertain_blocks(
+                      block_info, block_info_size, max_std_dev,
+                      min_reads, max_len , beginning);
+
+                  if (block_list == NULL)
+                    block_list = calloc(sizeof(struct block_list_t), 1);
+
+                  if (block_list == NULL)
+                    err(1, "re_read");
+
+                  block_number = 0;
+                }
+            }
+
+          if (block_data == NULL)
+            continue;
+
+          for (size_t i=0; i < length; i++)
+            {
+              bi_add_valid(&block_info[offset+i], &block_data[i]);
+            }
+
+          // free the block_data structure
+          for (int i=0; i< length; i++)
+            bi_clear(&block_data[i]);
+
+          free(block_data);
+          block_number++;
+        }
+      if (verbosity <= 3 && verbosity >= 0)
+        fprintf(stderr, "\n");
+
+      if (block_list)
+        free(block_list);
+    }
+  return;
 }
 
 int
@@ -1494,6 +1790,13 @@ main(int argc, char **argv)
               nread = 1; // don't exit loop
               write(2, "E", 1);
               ++errors;
+              bi_add_error(&block_info[blocks]);
+
+              if (bad_sector_warning)
+                {
+                  fprintf(stderr, "BAD SECTORS reads may not be accurate!\n");
+                  bad_sector_warning = 0;
+                }
 
               // omit block
               if (lseek(dev_fd, (off_t)512*sectors, SEEK_CUR) < 0)
@@ -1717,126 +2020,16 @@ main(int argc, char **argv)
             }
         }
     }
-  for(int tries=0; tries < max_reads; tries++)
-    {
-      struct block_list_t* block_list;
-      struct block_info_t* block_data;
 
-      // TODO block re-reading should back-off for a while if there are many
-      // interruptions and decrease the length of blocks read
-      // TODO block re-reading should provide ntermitent expected time and 
-      // status for the re-reading process
+ perform_re_reads(dev_fd, dev_stat_path, block_info, blocks, max_reads, 
+     max_std_dev, min_reads);
 
-      if (verbosity >= 0)
-        {
-
-          block_list = find_uncertain_blocks(
-              block_info, blocks, max_std_dev, min_reads, 1);
-
-          if (block_list == NULL)
-            {
-              if (verbosity >2)
-                fprintf(stderr, "no uncertain blocks found\n");
-              break;
-            }
-
-          size_t block_number=0;
-          while (!(block_list[block_number].off == 0 && 
-              block_list[block_number].len == 0))
-            {
-              if (verbosity > 2)
-                {
-                  size_t start = block_list[block_number].off,
-                        end = start + block_list[block_number].len;
-
-                  for(size_t i= start; i< end; i++)
-                    {
-                      double stdev = bi_int_rel_stdev(&block_info[i]);
-
-                      fprintf(stderr, "rel std dev for block %zi: %3.9f"
-                          ", average: %f, valid: %i, samples: %i\n", 
-                          i, 
-                          stdev,
-                          bi_average(&block_info[i]),
-                          bi_is_valid(&block_info[i]),
-                          bi_num_samples(&block_info[i]));
-                    }
-
-                }
-              block_number++;
-            }
-
-          fprintf(stderr, "re-reading %zi uncertain blocks\n", block_number);
-          free(block_list);
-        }
-
-
-      block_list = find_uncertain_blocks(
-          block_info, blocks, max_std_dev, min_reads, 10);
-
-      if (block_list == NULL)
-        break;
-
-      size_t block_number=0;
-      while (!(block_list[block_number].off == 0 && 
-          block_list[block_number].len == 0))
-        {
-          size_t offset, length;
-          offset = block_list[block_number].off;
-          length = block_list[block_number].len;
-          if (verbosity > 3)
-            fprintf(stderr, "processing block no %zi of length %zi\n", 
-                offset, length);
-
-          block_data = read_blocks(dev_fd, dev_stat_path, offset, length);
-          
-          if (block_data == NULL)
-            {
-              if (verbosity > 2)
-                fprintf(stderr, 
-                    "\nre-read of block %zi (length %zi) interrupted\n", 
-                    offset, length);
-              else fprintf(stderr, "!");// interrupted
-
-              block_number++;
-              continue;
-            }
-          else if (verbosity <= 3 && verbosity >= 0)
-            fprintf(stderr, "."); // OK
-
-          for (int i=0; i < length; i++)
-            {
-              if(bi_is_valid(&block_data[i]) == 1)
-                {
-                  if (bi_is_valid(&block_info[offset+i]) == 0)
-                    {
-                      bi_clear(&block_info[offset+i]);
-                      bi_make_valid(&block_info[offset+i]);
-                    }
-                  bi_add(&block_info[offset+i],
-                      &block_data[i]);
-                }
-            }
-
-
-          // free the block_data structure
-          for (int i=0; i< length; i++)
-            bi_clear(&block_data[i]);
-
-          free(block_data);
-          block_number++;
-        }
-      if (verbosity <= 3 && verbosity >= 0)
-        fprintf(stderr, "\n");
-
-      free(block_list);
-    }
 
   // print uncertain blocks
   struct block_list_t* block_list;
 
   block_list = find_uncertain_blocks(
-      block_info, blocks, max_std_dev, min_reads, 1);
+      block_info, blocks, max_std_dev, min_reads, 1, 0);
 
   if (block_list == NULL)
     {
