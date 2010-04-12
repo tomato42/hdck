@@ -1,5 +1,5 @@
 /** hdck - hard drive low-level errors checking 
- * Compile with GCC, and -lrt
+ * Compile with GCC, and -lrt -lm
  * (c) 2009 Hubert Kario
  * uses parts of code from GNU dd:
  *  * Copyright (C) 2002-9 Bruce Allen <smartmontools-support@lists.sourceforge.net>
@@ -39,6 +39,7 @@
 #include <sched.h>
 #include <sys/syscall.h>
 #include <getopt.h>
+#include <math.h>
 #include "ioprio.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 
@@ -123,6 +124,21 @@ sqr_time(struct timespec *res, struct timespec val)
   res->tv_nsec = val.tv_nsec * val.tv_nsec % 1000000000;
 }
 
+/** take square root out of time 
+ */
+void
+sqrt_time(struct timespec *res, struct timespec val)
+{
+  res->tv_sec = floor(sqrt(val.tv_sec));
+  res->tv_nsec = (sqrt(val.tv_sec) - res->tv_sec) * 1000000000 + 
+    floor(sqrt(val.tv_nsec));
+  if (res->tv_nsec >= 1000000000)
+    {
+      res->tv_nsec -= 1000000000;
+      res->tv_sec += 1;
+    }
+}
+
 void
 div_time(struct timespec *res, struct timespec divisor, long long divider)
 {
@@ -147,13 +163,13 @@ sum_time(struct timespec *sum, struct timespec *adder)
 int
 main(int argc, char **argv)
 {
-   int c;
-   int digit_optind = 0;
-   char* filename = NULL;
-   int exclusive = 0;
-   int nodirect = 0; ///< don't use O_DIRECT access
-   int noaffinity = 0; ///< don't set CPU affinity
-   int nortio = 0; ///< don't change process scheduling to RT
+  int c;
+  int digit_optind = 0;
+  char* filename = NULL;
+  int exclusive = 0;
+  int nodirect = 0; ///< don't use O_DIRECT access
+  int noaffinity = 0; ///< don't set CPU affinity
+  int nortio = 0; ///< don't change process scheduling to RT
   int sector_times = 0;
   enum {
       PRINT_TIMES = 1,
@@ -168,93 +184,94 @@ main(int argc, char **argv)
       exit(EXIT_FAILURE);
     }
 
-   while (1) {
-       int this_option_optind = optind ? optind : 1;
-       int option_index = 0;
-       struct option long_options[] = {
-           {"file", 1, 0, 'f'}, // 0
-           {"exclusive", 0, 0, 'x'}, // 1
-           {"nodirect", 0, &nodirect, 1}, // 2
-           {"verbose", 0, 0, 'v'}, // 3
-           {"noaffinity", 0, &noaffinity, 1}, // 4
-           {"nortio", 0, &nortio, 1}, // 5
-           {"sector-times", 0, &sector_times, PRINT_TIMES}, // 6
-           {"sector-symbols", 0, &sector_times, PRINT_SYMBOLS}, // 7
-           {"nosync", 0, &nosync, 1}, // 8
-           {"noverbose", 0, 0, 0}, // 9
-           {"noflush", 0, &noflush, 1}, // 10
-           {0, 0, 0, 0}
-       };
+  while (1) {
+    int this_option_optind = optind ? optind : 1;
+    int option_index = 0;
+    struct option long_options[] = {
+        {"file", 1, 0, 'f'}, // 0
+        {"exclusive", 0, 0, 'x'}, // 1
+        {"nodirect", 0, &nodirect, 1}, // 2
+        {"verbose", 0, 0, 'v'}, // 3
+        {"noaffinity", 0, &noaffinity, 1}, // 4
+        {"nortio", 0, &nortio, 1}, // 5
+        {"sector-times", 0, &sector_times, PRINT_TIMES}, // 6
+        {"sector-symbols", 0, &sector_times, PRINT_SYMBOLS}, // 7
+        {"nosync", 0, &nosync, 1}, // 8
+        {"noverbose", 0, 0, 0}, // 9
+        {"noflush", 0, &noflush, 1}, // 10
+        {0, 0, 0, 0}
+    };
 
-       c = getopt_long(argc, argv, "f:xhv?",
-                long_options, &option_index);
-       if (c == -1)
-           break;
+    c = getopt_long(argc, argv, "f:xhv?",
+             long_options, &option_index);
+    if (c == -1)
+      break;
 
-       switch (c) {
-       case 0:
-           if (verbosity > 5)
-             {
-               printf("option %s", long_options[option_index].name);
-               if (optarg)
-                   printf(" with arg %s", optarg);
-               printf("\n");
-             }
-           if (option_index == 9)
-             {
-               verbosity--;
-               break;
-             }
-           break;
+    switch (c) {
+    case 0:
+        if (verbosity > 5)
+          {
+            printf("option %s", long_options[option_index].name);
+            if (optarg)
+                printf(" with arg %s", optarg);
+            printf("\n");
+          }
+        if (option_index == 9)
+          {
+            verbosity--;
+            break;
+          }
+        break;
 
-       case 'v':
-           if (verbosity > 5 ) printf("option v\n");
-           verbosity++;
-           break;
+    case 'v':
+        if (verbosity > 5 ) printf("option v\n");
+        verbosity++;
+        break;
 
-       case 'x':
-           if (verbosity > 5) printf("option x\n");
-           exclusive = 1;
-           break;
+    case 'x':
+        if (verbosity > 5) printf("option x\n");
+        exclusive = 1;
+        break;
 
-       case 'f':
-           filename = optarg;
-           if (verbosity > 5) printf("option f with value '%s'\n", optarg);
-           break;
+    case 'f':
+        filename = optarg;
+        if (verbosity > 5) printf("option f with value '%s'\n", optarg);
+        break;
 
-       case 'h':
-       case '?':
-           usage();
-           exit(EXIT_SUCCESS);
-           break;
+    case 'h':
+    case '?':
+        usage();
+        exit(EXIT_SUCCESS);
+        break;
 
-       default:
-           printf("?? getopt returned character code 0%o ??\n", c);
-           exit(EXIT_FAILURE);
-       }
-   }
+    default:
+        printf("?? getopt returned character code 0%o ??\n", c);
+        exit(EXIT_FAILURE);
+    }
+  }
 
-   if (optind < argc)
+  if (optind < argc)
     {
-       printf("trailing options: ");
-       while (optind < argc)
-           printf("%s ", argv[optind++]);
-       printf("\n");
-       usage();
-       exit(EXIT_FAILURE);
+      printf("trailing options: ");
+      while (optind < argc)
+          printf("%s ", argv[optind++]);
+      printf("\n");
+      usage();
+      exit(EXIT_FAILURE);
     }
 
-   if (filename == NULL)
-     {
-       printf("Missing -f parameter!\n");
-       usage();
-       exit(EXIT_FAILURE);
-     }
+  if (filename == NULL)
+    {
+      printf("Missing -f parameter!\n");
+      usage();
+      exit(EXIT_FAILURE);
+    }
 
   struct timespec time1, time2, 
                   sumtime, /* sumaric time */
                   res, /* temp result */
-                  times, timee;
+                  times, timee,
+                  sumsqtime; /* sum of squares (for std. deviation) */
   long long blocks = 0;
 
   int dev_fd = 0;
@@ -343,6 +360,8 @@ main(int argc, char **argv)
 
   sumtime.tv_sec = 0;
   sumtime.tv_nsec = 0;
+  sumsqtime.tv_sec = 0;
+  sumsqtime.tv_nsec = 0;
  
   long long errors = 0,
     vvfast = 0,
@@ -379,32 +398,32 @@ main(int argc, char **argv)
       else
         diff_time(&res, time1, time2);
 
-      if (res.tv_nsec < 2000000) // very very fast read
+      if (res.tv_nsec < 2000000 && res.tv_sec == 0) // very very fast read
         {
           if (sector_times == PRINT_SYMBOLS) write(0,"_",1);
           ++vvfast;
         }
-      else if (res.tv_nsec < 5000000) // very fast read
+      else if (res.tv_nsec < 5000000 && res.tv_sec == 0) // very fast read
         {
           if (sector_times == PRINT_SYMBOLS) write(0,".",1);
           ++vfast;
         }
-      else if (res.tv_nsec < 10000000) // fast read
+      else if (res.tv_nsec < 10000000 && res.tv_sec == 0) // fast read
         {
           if (sector_times == PRINT_SYMBOLS) write(0,",",1);
           ++fast;
         }
-      else if (res.tv_nsec < 25000000) // normal read
+      else if (res.tv_nsec < 25000000 && res.tv_sec == 0) // normal read
         {
           if (sector_times == PRINT_SYMBOLS) write(0,"-",1);
           ++normal;
         }
-      else if (res.tv_nsec < 50000000) // slow read
+      else if (res.tv_nsec < 50000000 && res.tv_sec == 0) // slow read
         {
           if (sector_times == PRINT_SYMBOLS) write(0,"+",1);
           ++slow;
         }
-      else if (res.tv_nsec < 80000000) // very slow read
+      else if (res.tv_nsec < 80000000 && res.tv_sec == 0) // very slow read
         {
           if (sector_times == PRINT_SYMBOLS) write(0,"#",1);
           ++vslow;
@@ -420,6 +439,8 @@ main(int argc, char **argv)
 //      fsync(0);
       blocks++;
       sum_time(&sumtime, &res);
+      sqr_time(&res, res);
+      sum_time(&sumsqtime, &res);
       if (nread == 0)
         break;
 
@@ -428,7 +449,7 @@ main(int argc, char **argv)
           clock_gettime(TIMER_TYPE, &timee);
           diff_time(&res, times, timee);
           float speed;
-          speed = blocks * sectors * 512 / 1024 * 1.0f / 1024 / res.tv_sec;
+          speed = blocks * sectors * 512 / 1024 * 1.0f / 1024 / (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
           fprintf(stderr,"read %lli sectors (%.3fMiB/s)\n",
              blocks*sectors,
              speed);
@@ -452,6 +473,9 @@ main(int argc, char **argv)
   fprintf(stderr, "wall time: %lis.%lims.%liµs.%lins\n", res.tv_sec,
       res.tv_nsec/1000000, res.tv_nsec/1000%1000,
       res.tv_nsec%1000);
+  sqrt_time(&res, sumsqtime);
+  div_time(&res, res, blocks);
+  fprintf(stderr, "std dev: %li.%09li\n", res.tv_sec, res.tv_nsec);
   fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
       "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
       errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
