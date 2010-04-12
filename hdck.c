@@ -265,20 +265,129 @@ readlink_malloc (char *filename)
       size *= 2;
     }
 }
+
+char*
+read_link(char* link)
+{
+  char* buf;
+  ssize_t bufsize=1024;
+  ssize_t ret;
+  while(1)
+    {
+      buf = malloc(bufsize);
+      if (buf == NULL)
+        {
+          err(1, "malloc");
+        }
+      ret = readlink(link, buf, bufsize);
+
+      if (ret == -1)
+        err(1, "readlink");
+
+      if (ret < bufsize-1)
+        {
+          buf[ret]='\0';
+          return buf;
+      else
+        {
+          free(buf);
+          bufsize*=2;
+          buf = malloc(bufsize);
+          if (buf == NULL)
+            err(1, "malloc");
+        }
+    }
+}
+
 char*
 get_file_stat_sys_name(char* filename)
 {
   char* devname = NULL;
   struct stat file_stat;
+  char* name;
+  char* stat_sys_name;
 
-  stat(filename, &file_stat);
+  if(stat(filename, &file_stat) == -1)
+    err(1, "stat");
 
   if (S_ISLNK(file_stat.st_mode))
     {
+      filename = read_link(filename);
     }
-  else
+
+  if(stat(filename, &file_stat) == -1)
+    err(1, "stat");
+
+  if (S_ISLNK(file_stat.st_mod))
     {
+      err(1, "circular reference");
     }
+
+  if (!S_ISBLK(file_stat.st_mod))
+    {
+      return NULL;
+    }
+
+  name = strrchr(filename, '/');
+  
+  if (verbosity > 2)
+    {
+      printf("device name %s\n", name);
+    }
+  
+  stat_sys_name = malloc(strlen(name) + 12);
+  if (stat_sys_name == NULL)
+    err(1, "malloc");
+
+  strcat(stat_sys_name, "/sys/block/");
+  srtcat(stat_sys_name, name);
+
+  // check if file exists
+  if(stat(stat_sys_name, &file_stat) == -1)
+    {
+      if (errno == ENOENT)
+        {
+          free(stat_sys_name);
+          return NULL;
+        }
+      else
+        {
+          err(1, "stat");
+        }
+    }
+
+  return stat_sys_name;
+}
+
+int
+get_read_writes(char* filepath, long long* reads, long long* writes)
+{
+  int fd;
+  char[1024] buf;
+  int read;
+  fd = open(filepath, O_RDONLY);
+  if (fd < 0)
+    {
+      err(1, "open");
+    }
+  read = read(fd,buf, 1024);
+  if (read < 0)
+    err(1, "read");
+  // Field 1 -- # of reads issued
+  // Field 2 -- # of reads merged 
+  // Field 3 -- # of sectors read
+  // Field 4 -- # of milliseconds spent reading
+  // Field 5 -- # of writes completed
+  // Field 6 -- # of writes merged
+  // Field 7 -- # of sectors written
+  // Field 8 -- # of milliseconds spent writing
+  // Field 9 -- # of I/Os currently in progress
+  // Field 10 -- # of milliseconds spent doing I/Os
+  // Field 11 -- weighted # of milliseconds spent doing I/Os
+  read = sscanf(buf, "%lli %lli* %lli* %lli* %lli %lli* %lli* %lli* %lli* %lli* %lli*", reads, writes);
+  if (read != 2)
+    return 1;
+  return 0;
 }
 
 int
@@ -475,10 +584,12 @@ main(int argc, char **argv)
   dev_stat_path = get_file_stat_sys_name(filename);
 
   fesetround(2); // round UP
-  block_info = calloc(lrintl(filesize*1.0l/512/sectors), sizeof(struct block_info_t));
+  block_info = calloc(lrintl(filesize*1.0l/512/sectors), 
+      sizeof(struct block_info_t));
   if (block_info == NULL)
     {
-      printf("Allocation error, tried to allocate %li bytes:\n", lrintl(filesize*1.0l/512/sectors)* sizeof(struct block_info_t));
+      printf("Allocation error, tried to allocate %li bytes:\n", 
+          lrintl(filesize*1.0l/512/sectors)* sizeof(struct block_info_t));
       err(1, "calloc");
     }
 
@@ -514,11 +625,13 @@ main(int argc, char **argv)
   clock_gettime(TIMER_TYPE, &times);
   while (1)
     {
-      get_read_writes(dev_stat_path, &read_s, &write_s);
+      if (dev_stat_path != NULL)
+        get_read_writes(dev_stat_path, &read_s, &write_s);
       clock_gettime(TIMER_TYPE, &time1);
       nread = read(dev_fd, ibuf, sectors*512);
       clock_gettime(TIMER_TYPE, &time2);
-      get_read_writes(dev_stat_path, &read_e, &write_e);
+      if (dev_stat_path != NULL)
+        get_read_writes(dev_stat_path, &read_e, &write_e);
       if (nread < 0) // on error
         {
           if (errno != EIO)
@@ -650,7 +763,8 @@ main(int argc, char **argv)
             percent = (blocks * sectors * 512.0f) / (max_sectors * sectors * 2.0f);
           long long time_to_go;
           time_to_go = (res.tv_sec*1.0) / percent;
-          fprintf(stderr,"read %lli sectors, %.3fMiB/s (%.3fMiB/s), %.2f%%, in %02li:%02li:%02li, expected time: %02lli:%02lli:%02lli\n",
+          fprintf(stderr,"read %lli sectors, %.3fMiB/s (%.3fMiB/s), %.2f%%, "
+              "in %02li:%02li:%02li, expected time: %02lli:%02lli:%02lli\n",
              blocks*sectors,
              cur_speed,
              speed,
