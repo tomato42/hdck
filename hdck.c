@@ -38,6 +38,7 @@
 #include <err.h>
 #include <sched.h>
 #include <sys/syscall.h>
+#include <getopt.h>
 #include "ioprio.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 
@@ -45,6 +46,25 @@ int
 pagesize = 4096;
 int
 sectors = 255;
+int
+verbosity = 0;
+
+/** Print usage information
+ */
+usage()
+{
+  printf("Usage: hdck [OPTIONS]\n");
+  printf("Test hard drive for latent and hidden bad sectors\n");
+  printf("\n");
+  printf("-f, --file FILE     device file to test\n");
+  printf("-x, --exclusive     use exclusive access\n");
+  printf("                    (runs faster, but partitions must be umounted)\n");
+  printf("--nodirect          don't use O_DIRECT and don't flush buffers before reading\n");
+  printf("--noaffinity        don't set CPU affinity to 0th core/CPU\n");
+  printf("--nort              don't change priority to real-time\n");
+  printf("-v, --verbose       be more verbose\n");
+  printf("-h, -?              print this message\n");
+}
 
 /**Return PTR, aligned upward to the next multiple of ALIGNMENT.
    ALIGNMENT must be nonzero.  The caller must arrange for ((char *)
@@ -100,6 +120,98 @@ sum_time(struct timespec *sum, struct timespec *adder)
 int
 main(int argc, char **argv)
 {
+   int c;
+   int digit_optind = 0;
+   char* filename = NULL;
+   int exclusive = 0;
+   int nodirect = 0; ///< don't use O_DIRECT access
+   int noaffinity = 0; ///< don't set CPU affinity
+   int nort = 0; ///< don't change process scheduling to RT
+
+  if (argc == 1)
+    {
+      usage();
+      exit(EXIT_FAILURE);
+    }
+
+   while (1) {
+       int this_option_optind = optind ? optind : 1;
+       int option_index = 0;
+       struct option long_options[] = {
+           {"file", 1, 0, 'f'}, // 0
+           {"exclusive", 0, 0, 'x'}, // 1
+           {"nodirect", 0, &nodirect, 1}, // 2
+           {"verbose", 0, 0, 'v'}, // 3
+           {"noaffinity", 0, &noaffinity, 1}, // 4
+           {"nort", 0, &nort, 1}, // 5
+           {0, 0, 0, 0}
+       };
+
+       c = getopt_long(argc, argv, "f:xhv?",
+                long_options, &option_index);
+       if (c == -1)
+           break;
+
+       switch (c) {
+       case 0:
+           if (verbosity > 5)
+             {
+               printf("option %s", long_options[option_index].name);
+               if (optarg)
+                   printf(" with arg %s", optarg);
+               printf("\n");
+             }
+           if (option_index == 2)
+             {
+               nodirect = 1;
+               break;
+             }
+           break;
+
+       case 'v':
+           if (verbosity > 5 ) printf("option v\n");
+           verbosity++;
+           break;
+
+       case 'x':
+           if (verbosity > 5) printf("option x\n");
+           exclusive = 1;
+           break;
+
+       case 'f':
+           filename = optarg;
+           if (verbosity > 5) printf("option f with value '%s'\n", optarg);
+           break;
+
+       case 'h':
+       case '?':
+           usage();
+           exit(EXIT_FAILURE);
+           break;
+
+       default:
+           printf("?? getopt returned character code 0%o ??\n", c);
+           exit(EXIT_FAILURE);
+       }
+   }
+
+   if (optind < argc)
+    {
+       printf("trailing options: ");
+       while (optind < argc)
+           printf("%s ", argv[optind++]);
+       printf("\n");
+       usage();
+       exit(EXIT_FAILURE);
+    }
+
+   if (filename == NULL)
+     {
+       printf("Missing -f parameter!\n");
+       usage();
+       exit(EXIT_FAILURE);
+     }
+
   struct timespec time1, time2, 
                   sumtime, /* sumaric time */
                   res, /* temp result */
@@ -123,16 +235,19 @@ main(int argc, char **argv)
   if (sched_setaffinity(0,sizeof(cpu_set_t), &cpu_set) <0)
     err(1, "affinity");
 
-  // make the process' IO prio highest 
-  if (ioprio_set(IOPRIO_WHO_PROCESS, 
-                 0, 
-                 IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)
-        ) != 0)
-    err(1, "ioprio");
+  if (!nort)
+    {
+      // make the process' IO prio highest 
+      if (ioprio_set(IOPRIO_WHO_PROCESS, 
+                     0, 
+                     IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)
+            ) != 0)
+        err(1, "ioprio: can't make process real-time");
+    }
 
   // open the file with disabled caching
   // (O_EXCL works on devices too)
-  dev_fd = open(argv[1], O_RDONLY | O_DIRECT | O_LARGEFILE | O_SYNC);
+  dev_fd = open(filename, O_RDONLY | O_DIRECT | O_LARGEFILE | O_SYNC);
   if (dev_fd < 0)
     {
       err(1, NULL);
