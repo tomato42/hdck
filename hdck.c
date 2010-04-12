@@ -46,6 +46,7 @@
 #include <math.h>
 #include <fenv.h>
 #include <string.h>
+#include <assert.h>
 #include "ioprio.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 
@@ -57,6 +58,7 @@ int exclusive = 0; ///< use exclusive file access (O_EXCL)
 int nodirect = 0; ///< don't use O_DIRECT access
 int noaffinity = 0; ///< don't set CPU affinity
 int nortio = 0; ///< don't change process scheduling to RT
+int write_individual_times_to_file = 1; ///< TODO - cmd option
 
 /// minimal number of reads for a sector to be qualified as valid
 long long min_reads = 0; 
@@ -69,10 +71,9 @@ size_t disk_cache_size = 32;
 
 /// information about a single block (256 sectors by default)
 struct block_info_t {
-    struct timespec sumtime; ///< sum of all the read times
-    struct timespec sumsqtime; ///< sum of all squared read times
-    int samples; ///< number of samples taken
-    int valid; ///< 0 if data is invalid (because read was interrupted)
+    double* samples; ///< measurements for the block
+    short int samples_len; ///< number of samples taken
+    short int valid; ///< 0 if data is invalid (because read was interrupted)
 };
 
 /// list of sectors to read
@@ -247,6 +248,388 @@ time_double(struct timespec ts)
   return ts.tv_sec + ts.tv_nsec * 1.0 / 1E9;
 }
 
+/**
+ * add time (in ms) to samples inside block_info
+ */
+void
+bi_add_time(struct block_info_t* block_info, double time)
+{
+  if (block_info->samples_len == 0)
+    {
+      block_info->samples = malloc(sizeof(double));
+      if (!block_info->samples)
+        err(1, "bi_add_time");
+
+      block_info->samples[0] = time;
+      block_info->samples_len = 1;
+    }
+  else
+    {
+      block_info->samples_len++;
+      block_info->samples = realloc(block_info->samples, 
+          sizeof(double) * block_info->samples_len);
+
+      if (!block_info->samples)
+        err(1, "bi_add_time");
+
+      block_info->samples[block_info->samples_len-1] = time;
+    }
+}
+
+/** add anouther block_info 
+ */
+void
+bi_add(struct block_info_t* sum, struct block_info_t* adder)
+{
+  if (adder->samples_len == 0)
+    return;
+
+  if (sum->samples_len == 0)
+    {
+      sum->samples = malloc(sizeof(double)*adder->samples_len);
+      if (!sum->samples)
+        err(1, "bi_add");
+
+      memcpy(sum->samples, adder->samples, sizeof(double) * adder->samples_len);
+
+      sum->samples_len = adder->samples_len;
+    }
+  else
+    {
+      sum->samples = realloc(sum->samples, sizeof(double)*(
+            sum->samples_len + adder->samples_len));
+
+      if (!sum->samples)
+        err(1, "bi_add");
+
+      for(int i=0; i< adder->samples_len; i++)
+        sum->samples[sum->samples_len + i] = adder->samples[i];
+
+      sum->samples_len += adder->samples_len;
+    }
+
+  return;
+}
+
+/** removes last sample
+ */
+void
+bi_remove_last(struct block_info_t* block_info)
+{
+  if (block_info->samples_len > 1)
+    block_info->samples_len --;
+  else
+    {
+      free(block_info->samples);
+      block_info->samples = NULL;
+      block_info->samples_len = 0;
+    }
+}
+
+
+/**
+ * reset the block_info struct
+ */
+void
+bi_clear(struct block_info_t* block_info)
+{
+  if (block_info->samples)
+    free(block_info->samples);
+
+  block_info->samples = NULL;
+  block_info->samples_len = 0;
+  block_info->valid = 0;
+}
+
+/** initalises the block_info_t struct
+ */
+void
+bi_init(struct block_info_t* block_info)
+{
+  block_info->samples = NULL;
+  block_info->samples_len = 0;
+  block_info->valid = 0;
+}
+
+/** check if block_info is valid
+ */
+int
+bi_is_valid(struct block_info_t* block_info)
+{
+  return block_info->valid;
+}
+
+/** set block info to be valid
+ */
+void
+bi_make_valid(struct block_info_t* block_info)
+{
+  block_info->valid = 1;
+}
+
+/** set block info to be invalid
+ */
+void
+bi_make_invalid(struct block_info_t* block_info)
+{
+  block_info->valid = 0;
+}
+
+/** returns individual sample times
+ */
+double*
+bi_get_times(struct block_info_t* block_info)
+{
+  return block_info->samples;
+}
+
+/** return standard deviation for samples
+ */
+double
+bi_stdev(struct block_info_t* block_info)
+{
+  int n = 0;
+  long double mean = 0.0;
+  long double M2 = 0.0;
+  long double delta;
+
+  for (int i=0; i < block_info->samples_len; i++)
+    {
+      n++;
+      delta = block_info->samples[i] - mean;
+      mean += delta/n;
+      M2 += delta * (block_info->samples[i] - mean); 
+    }
+  
+  return sqrt(M2 / n);
+}
+
+/** return relative standard deviation for samples (stdev/mean)
+ */
+double
+bi_rel_stdev(struct block_info_t* block_info)
+{
+  int n = 0;
+  long double mean = 0.0;
+  long double M2 = 0.0;
+  long double delta;
+  long double sum = 0.0;
+
+  for (int i=0; i < block_info->samples_len; i++)
+    {
+      n++;
+      delta = block_info->samples[i] - mean;
+      mean += delta/n;
+      M2 += delta * (block_info->samples[i] - mean);
+      sum += block_info->samples[i];
+    }
+  
+  return (sqrt(M2 / n)) / ( sum / n);
+}
+
+/** return arithemtic average for samples
+ */
+double
+bi_average(struct block_info_t* block_info)
+{
+  long double sum = 0.0;
+  int i;
+
+  for( i=0; i<block_info->samples_len; i++)
+    sum += block_info->samples[i];
+
+  return sum / i;
+}
+
+/** return sum of samples
+ */
+double
+bi_sum(struct block_info_t* block_info)
+{
+  long double sum = 0.0;
+
+  for (int i=0; i< block_info->samples_len; i++)
+    sum += block_info->samples[i];
+
+  return sum;
+}
+
+/** return number of collected samples
+ */
+int
+bi_num_samples(struct block_info_t* block_info)
+{
+  return block_info->samples_len;
+}
+
+/**
+ * internal function to pass to qsort
+ */
+static int
+__double_sort(const void* a, const void* b)
+{
+  double x, y;
+  x = *(double *)a;
+  y = *(double *)b;
+
+  if (x < y)
+    return -1;
+  else if (x == y)
+    return 0;
+  else
+    return 1;
+}
+
+/** return truncated average for samples
+ * @parm percent how much data is to be thrown off
+ */
+double
+bi_trunc_average(struct block_info_t* block_info, double percent)
+{
+  assert(percent >= 0 || percent <= 1);
+
+  double* tmp;
+
+  tmp = malloc(sizeof(double) * block_info->samples_len);
+  if (!tmp)
+    err(1, "bi_trunc_average");
+
+  memcpy(tmp, block_info->samples, block_info->samples_len * sizeof(double));
+
+  qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
+
+  int low, high;
+
+  low = ceil(percent / 2 * block_info->samples_len);
+  high = floor(block_info->samples_len - percent / 2 * block_info->samples_len);
+
+  if (high == low)
+    {
+      free(tmp);
+      return 0;
+    }
+
+  int i;
+  long double sum = 0.0;
+
+  for (i = low; i < high; i++)
+    {
+      sum += tmp[i];
+    }
+
+  free (tmp);
+
+  return sum / (high - low);
+}
+
+/** return truncated standard deviation for samples
+ * @param percent how much data is to be thrown off
+ */
+double
+bi_trunc_stdev(struct block_info_t* block_info, double percent)
+{
+  assert(percent >= 0 || percent <= 1);
+
+  double* tmp;
+
+  tmp = malloc(sizeof(double) * block_info->samples_len);
+  if (!tmp)
+    err(1, "bi_trunc_average");
+
+  memcpy(tmp, block_info->samples, block_info->samples_len * sizeof(double));
+
+  qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
+
+  int low, high;
+
+  low = ceil(percent / 2 * block_info->samples_len);
+  high = floor(block_info->samples_len - percent / 2 * block_info->samples_len);
+
+  if (high == low)
+    {
+      free(tmp);
+      return 0;
+    }
+
+  int n = 0;
+  long double mean = 0.0;
+  long double M2 = 0.0;
+  long double delta;
+
+  for (int i=low; i < high; i++)
+    {
+      n++;
+      delta = tmp[i] - mean;
+      mean += delta/n;
+      M2 += delta * (tmp[i] - mean); 
+    }
+
+  free(tmp);
+  
+  return sqrt(M2 / n);
+}
+
+/** return truncated relative standard deviation (stdev/mean) for samples 
+ * @param percent how much data is to be thrown off
+ */
+double
+bi_trunc_rel_stdev(struct block_info_t* block_info, double percent)
+{
+  assert(percent >= 0 || percent <= 1);
+
+  double* tmp;
+
+  tmp = malloc(sizeof(double) * block_info->samples_len);
+  if (!tmp)
+    err(1, "bi_trunc_average");
+
+  memcpy(tmp, block_info->samples, block_info->samples_len * sizeof(double));
+
+  qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
+
+  int low, high;
+
+  low = ceil(percent / 2 * block_info->samples_len);
+  high = floor(block_info->samples_len - percent / 2 * block_info->samples_len);
+
+  if (high == low)
+    {
+      free(tmp);
+      return 0;
+    }
+
+  int n = 0;
+  long double mean = 0.0;
+  long double M2 = 0.0;
+  long double delta;
+  long double sum = 0.0;
+
+  for (int i=low; i < high; i++)
+    {
+      n++;
+      delta = tmp[i] - mean;
+      mean += delta/n;
+      M2 += delta * (tmp[i] - mean); 
+      sum += tmp[i];
+    }
+
+  free(tmp);
+  
+  return (sqrt(M2 / n)) / (sum / n);
+}
+
+/** "inteligent" truncated rel_st_dev
+ */
+double
+bi_int_rel_stdev(struct block_info_t* block_info)
+{
+  if(block_info->samples_len < 5)
+    return bi_rel_stdev(block_info);
+
+  return bi_trunc_rel_stdev(block_info, 0.25);
+}
+
+
 double
 calculate_std_dev(struct timespec sumtime, struct timespec sumsqtime, long long n)
 {
@@ -390,6 +773,9 @@ get_file_stat_sys_name(char* filename)
   char* name;
   char* stat_sys_name;
 
+  static char sys_path[] = "/sys/block/";
+  static char sys_stat[] = "/stat";
+
   if(stat(filename, &file_stat) == -1)
     err(1, "stat");
 
@@ -420,14 +806,14 @@ get_file_stat_sys_name(char* filename)
       printf("device name %s\n", name);
     }
   
-  stat_sys_name = malloc(strlen(name) + 17);
+  stat_sys_name = malloc(strlen(name) + strlen(sys_path) + strlen(sys_stat) + 1);
   if (stat_sys_name == NULL)
     err(1, "malloc");
 
   stat_sys_name[0]='\0';
-  strcat(stat_sys_name, "/sys/block/");
+  strcat(stat_sys_name, sys_path);
   strcat(stat_sys_name, name);
-  strcat(stat_sys_name, "/stat");
+  strcat(stat_sys_name, sys_stat);
 
   if (verbosity > 2)
     {
@@ -452,7 +838,10 @@ get_file_stat_sys_name(char* filename)
 }
 
 int
-get_read_writes(char* filepath, long long* reads, long long* read_sec, long long* writes)
+get_read_writes(char* filepath, 
+                long long* reads, 
+                long long* read_sec, 
+                long long* writes)
 {
   int fd;
   char buf[4096];
@@ -478,7 +867,19 @@ get_read_writes(char* filepath, long long* reads, long long* read_sec, long long
   // Field 10 -- # of milliseconds spent doing I/Os
   // Field 11 -- weighted # of milliseconds spent doing I/Os
   long long tmp=0;
-  read_bytes = sscanf(buf, "%lli %lli %lli %lli %lli %lli* %lli* %lli* %lli* %lli* %lli*", reads, &tmp, read_sec, &tmp, &tmp, writes);
+  read_bytes = sscanf(buf, 
+                  "%lli %lli %lli %lli %lli %lli* %lli* %lli* %lli* %lli* %lli*",
+                  reads, 
+                  &tmp, 
+                  read_sec,
+                  &tmp, 
+                  &tmp, 
+                  writes,
+                  &tmp,
+                  &tmp,
+                  &tmp,
+                  &tmp,
+                  &tmp);
   close(fd);
   if (read_bytes != 2)
     return 1;
@@ -491,8 +892,8 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
   struct timespec time_start; ///< start of read
   struct timespec time_end; ///< end of read
   struct timespec res; ///< temporary result
-  long long read_start, read_sectors_s, write_start,
-            read_end, read_sectors_e, write_end;
+  long long read_start = 0, read_sectors_s = 0, write_start = 0,
+            read_end = 0, read_sectors_e = 0, write_end = 0;
   struct block_info_t* block_info;
   char* buffer;
   char* buffer_free;
@@ -515,7 +916,9 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
   off_t disk_cache = disk_cache_size * 1024 * 1024 /sectors / 512;
 
   // read additional blocks before the main data to empty disk cache
-  if(lseek(fd, ((offset-disk_cache)*sectors*512>=0)?(offset-disk_cache)*sectors*512:0, SEEK_SET) < 0)
+  if(lseek(fd, ((offset-disk_cache-1)*sectors*512>=0)?
+                (offset-disk_cache-1)*sectors*512:
+                0, SEEK_SET) < 0)
     goto interrupted;
 
   for (int i=0; i < disk_cache; i++)
@@ -527,8 +930,8 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
     }
 
   // read additional block before the main data to exclude seek time
-  if (offset-1 <= 0)
-    if ( lseek(fd, ((offset-1)*sectors*512>=0)?(offset-1)*sectors*512:0, SEEK_SET) < 0)
+  if (offset-disk_cache-1 < 0)
+    if ( lseek(fd, (offset-1>=0)?(offset-1)*sectors*512:0, SEEK_SET) < 0)
       goto interrupted;
 
   nread = read(fd, buffer, sectors*512);
@@ -538,6 +941,15 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
   if (offset == 0)
     if( lseek(fd, (off_t) 0, SEEK_SET) < 0)
       goto interrupted;
+
+  // check if current position is correct (assert)
+  if ( lseek(fd, (off_t)0, SEEK_CUR) != offset * sectors * 512)
+    {
+      fprintf(stderr, "hdck: read_blocks: wrong offset: got %lli expected %lli\n",
+          lseek(fd, (off_t)0, SEEK_CUR),
+          offset * sectors * 512);
+      exit(1);
+    }
 
   // start reading main block
   clock_gettime(TIMER_TYPE, &time_end);
@@ -568,13 +980,12 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
       else if (nread != sectors*512)
         goto interrupted;
 
-      block_info[no_blocks].valid = 1;
+      bi_make_valid(&block_info[no_blocks]);
+
       diff_time(&res, time_start, time_end);
       times_time(&res, 1000); // block_info is in ms, not ns
-      sum_time(&(block_info[no_blocks].sumtime), res);
-      sqr_time(&res, res);
-      sum_time(&(block_info[no_blocks].sumsqtime), res);
-      block_info[no_blocks].samples = 1;    
+
+      bi_add_time(&block_info[no_blocks], time_double(res));
 
       no_blocks++;
     }
@@ -604,6 +1015,8 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
 interrupted:
   free(buffer_free);
+  for(int i=0; i < len; i++)
+    bi_clear(&block_info[i]);
   free(block_info);
   return NULL;
 }
@@ -615,18 +1028,16 @@ interrupted:
  * uncertain
  * @param min_reads minimal number of reads for a block to be considered
  * checked
+ * @param glob how close sectors have to be near them to be bundled together
  */
 struct block_list_t*
 find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
-    float min_std_dev, int min_reads)
+    float min_std_dev, int min_reads, int glob)
 {
   struct block_list_t* block_list;
   struct block_list_t* ret;
   size_t uncertain = 0;
   size_t ret_len = 0;
-  struct timespec res;
-
-  off_t cache_blocks = disk_cache_size * 1024 * 1024 / sectors / 512;
 
   block_list = calloc(sizeof(struct block_list_t), block_info_len);
   if (block_list == NULL)
@@ -635,11 +1046,9 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
   // find uncertain blocks
   for (size_t block_no=0; block_no < block_info_len; block_no++)
     {
-      if (block_info[block_no].valid == 0 || 
-          block_info[block_no].samples < min_reads ||
-           calculate_std_dev(block_info[block_no].sumtime, 
-                            block_info[block_no].sumsqtime, 
-                            block_info[block_no].samples ) > min_std_dev)
+      if (bi_is_valid(&block_info[block_no]) == 0 || 
+          bi_num_samples(&block_info[block_no]) < min_reads ||
+          bi_int_rel_stdev(&block_info[block_no]) > min_std_dev)
         {
           block_list[uncertain].off = block_no;
           block_list[uncertain].len = 1;
@@ -652,6 +1061,9 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
       free(block_list);
       return NULL;
     }
+
+  if (glob == 1)
+    return block_list;
 
   ret = calloc(sizeof(struct block_list_t), uncertain+1);
   if (ret == NULL)
@@ -666,8 +1078,8 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
       if (block_list[i].off <= ret[ret_len-1].off + ret[ret_len-1].len)
         continue;
 
-      if (block_list[i].off <= ret[ret_len-1].off + ret[ret_len-1].len + 10
-         && ret[ret_len-1].len < 10)
+      if (block_list[i].off <= ret[ret_len-1].off + ret[ret_len-1].len + glob
+         && ret[ret_len-1].len < glob)
         {
           ret[ret_len-1].len += block_list[i].off 
                                 - (ret[ret_len-1].off + ret[ret_len-1].len)
@@ -692,28 +1104,38 @@ void
 write_to_file(char *file, struct block_info_t* block_info, size_t len)
 {
   FILE* handle;
-  struct timespec res;
-  struct timespec avg;
-  double stdev;
 
   handle = fopen(file, "w+");
   if (handle == NULL)
     err(1, "write_to_file");
 
-  fprintf(handle, "# sector_number, avg, std_dev, tries\n");
+  fprintf(handle, "# sector_number, avg, trunc_avg, std_dev, rel_st_dev, "
+      "trunc_st_dev, tries, samples\n");
 
   for(size_t i=0; i< len; i++)
     {
-      div_time(&avg, block_info[i].sumtime, block_info[i].samples);
-      stdev = calculate_std_dev(block_info[i].sumtime, block_info[i].sumsqtime,
-                               block_info[i].samples);
+      double trunc_avg;
+      if (bi_num_samples(&block_info[i]) < 5)
+        trunc_avg = bi_average(&block_info[i]);
+      else
+        trunc_avg = bi_trunc_average(&block_info[i], 0.25);
 
-      fprintf(handle, "%i %li.%li %f %i\n",
+      fprintf(handle, "%i\t%f\t%f\t%f\t%f\t%f\t%i",
           i,
-          avg.tv_sec,
-          avg.tv_nsec,
-          stdev,
-          block_info[i].samples);
+          bi_average(&block_info[i]),
+          trunc_avg,
+          bi_stdev(&block_info[i]),
+          bi_rel_stdev(&block_info[i]),
+          bi_int_rel_stdev(&block_info[i]),
+          bi_num_samples(&block_info[i]));
+      if (write_individual_times_to_file)
+        {
+          double* times;
+          times = bi_get_times(&block_info[i]);
+          for(int l=0; l<bi_num_samples(&block_info[i]); l++)
+            fprintf(handle, " %f", times[l]);
+        }
+      fprintf(handle, "\n");
     }
 
   fclose(handle);
@@ -865,11 +1287,11 @@ main(int argc, char **argv)
   if (exclusive)
     {
       if (min_reads == 0)
-        min_reads = 1;
+        min_reads = 2;
       if (max_reads == 0)
         max_reads = 5;
       if (max_std_dev == 0)
-        max_std_dev = 5;
+        max_std_dev = 0.25;
     }
   else
     {
@@ -878,7 +1300,7 @@ main(int argc, char **argv)
       if (max_reads == 0)
         max_reads = 10;
       if (max_std_dev == 0)
-        max_std_dev = 2;
+        max_std_dev = 0.5;
     }
 
   struct timespec time1, time2, /**< time it takes to read single block */
@@ -886,7 +1308,7 @@ main(int argc, char **argv)
                   res, /**< temp result */
                   times, timee, /**< wall clock start and end */
                   sumsqtime; /**< sum of squares (for std. deviation) */
-  long long blocks = 0;
+  size_t blocks = 0;
   long long abs_blocks = 0;
 
   int dev_fd = 0;
@@ -966,10 +1388,10 @@ main(int argc, char **argv)
   dev_stat_path = get_file_stat_sys_name(filename);
 
   fesetround(2); // round UP
-  number_of_blocks = lrintl(filesize*1.0l/512/sectors);
+  number_of_blocks = lrintl(ceil(filesize*1.0l/512/sectors));
   block_info = calloc(number_of_blocks, 
       sizeof(struct block_info_t));
-  if (block_info == NULL)
+  if (!block_info)
     {
       printf("Allocation error, tried to allocate %lli bytes:\n", 
           number_of_blocks* sizeof(struct block_info_t));
@@ -1014,6 +1436,16 @@ main(int argc, char **argv)
   int next_is_valid=1;
   int loop=0;
 
+  if (verbosity > 2)
+    {
+      fprintf(stderr, "min-reads: %lli, max re-reads: %lli, max rel std dev %f, "
+          "disk cache size: %ziMiB\n",
+         min_reads,
+         max_reads,
+         max_std_dev,
+         disk_cache_size); 
+    }
+
   // position the disk head
   lseek(dev_fd, (off_t)0, SEEK_SET);
   read(dev_fd, ibuf, pagesize);
@@ -1023,6 +1455,7 @@ main(int argc, char **argv)
   clock_gettime(TIMER_TYPE, &times);
   if (dev_stat_path != NULL)
     get_read_writes(dev_stat_path, &read_e, &read_sec_e, &write_e);
+
   while (1)
     {
       read_s = read_e;
@@ -1032,6 +1465,14 @@ main(int argc, char **argv)
       //  get_read_writes(dev_stat_path, &read_s, &read_sec_s, &write_s);
       time1.tv_sec=time2.tv_sec;
       time1.tv_nsec=time2.tv_nsec;
+
+      // assertion
+      if ( lseek(dev_fd, (off_t)0, SEEK_CUR) != ((off_t)blocks) * sectors * 512 )
+        {
+          fprintf(stderr, "hdck: main: wrong offset got %lli expected %lli\n",
+              lseek(dev_fd, (off_t)0, SEEK_CUR),
+              ((off_t)blocks) * sectors * 512);
+        }
 
       //clock_gettime(TIMER_TYPE, &time1);
       nread = read(dev_fd, ibuf, sectors*512);
@@ -1063,22 +1504,21 @@ main(int argc, char **argv)
         }
       // when the read was incomplete or interrupted
       else if (nread != sectors*512 || 
-          (read_e-read_s != 1 && nodirect == 0) || 
-          (read_e-read_s > 4 && nodirect == 1) || 
-          (read_sec_e-read_sec_s != 256 && nodirect == 0) || 
-          write_e != write_s)
+          (read_e-read_s != 1 && nodirect == 0 && dev_stat_path != NULL) || 
+          (read_e-read_s > 4 && nodirect == 1 && dev_stat_path != NULL) || 
+          (read_sec_e-read_sec_s != 256 && 
+                nodirect == 0 && dev_stat_path != NULL) || 
+          (write_e != write_s && dev_stat_path != NULL))
         {
-          fprintf(stderr, "block %lli interrupted\n", blocks);
+          if (verbosity > 0)
+            fprintf(stderr, "block %zi (LBA: %lli-%lli) interrupted\n", blocks,
+               ((off_t)blocks) * sectors, ((off_t)blocks+1)*sectors);
           diff_time(&res, time1, time2);
-          if (block_info[blocks].valid == 0)
+          times_time(&res, 1000); // in ms not ns
+          if (bi_is_valid(&block_info[blocks]) == 0)
             {
-              block_info[blocks].valid = 0;
-              sum_time(&(block_info[blocks].sumtime), res);
-              sqr_time(&res, res);
-              sum_time(&(block_info[blocks].sumsqtime), res);
-              block_info[blocks].samples ++;
+              bi_add_time(&block_info[blocks], time_double(res));
             }
-          block_info[blocks].valid = 0;
           diff_time(&res, time1, time2);
           if (nread != sectors*512)
             {
@@ -1091,58 +1531,53 @@ main(int argc, char **argv)
           // invalidate next read block (to ignore seeking)
           next_is_valid = 0;
 
-          // TODO: should invalidate the previous block too as the interrupting
-          // read/write could finish after our read
+          // invalidate last read block
+          if (blocks > 0 && bi_is_valid(&block_info[blocks-1]))
+            bi_remove_last(&block_info[blocks-1]);
         }
       else // when the read was correct
         {
           diff_time(&res, time1, time2);
           //make the times stored in block struct in ms not in ns
-          times_time(&res, 1000); 
+          times_time(&res, 1000);
+
           // update only if we can gather meaningful data
-          if (block_info[blocks].valid == 0 || 
-              (block_info[blocks].valid == 1 && next_is_valid == 1))
+          if (bi_is_valid(&block_info[blocks]) == 0 || 
+              (bi_is_valid(&block_info[blocks]) && next_is_valid == 1))
             {
-              if (block_info[blocks].valid == 0 && next_is_valid == 1)
+              if (bi_is_valid(&block_info[blocks]) == 0 && next_is_valid == 1)
                 {
                   // first valid read
-                  block_info[blocks].samples = 1;
-                  block_info[blocks].sumtime.tv_sec = res.tv_sec;
-                  block_info[blocks].sumtime.tv_nsec = res.tv_nsec;
-                  sqr_time(&res, res);
-                  block_info[blocks].sumsqtime.tv_sec = res.tv_sec;
-                  block_info[blocks].sumsqtime.tv_nsec = res.tv_nsec;
+                  bi_clear(&block_info[blocks]);
+                  bi_make_valid(&block_info[blocks]);
+                  bi_add_time(&block_info[blocks], time_double(res));
+
                   if (verbosity > 10)
-                    fprintf(stderr, "block: %lli, samples: %i, sumtime: "
-                        "%li.%09li, sumsqtime: %li.%09li\n", 
-                        blocks, 
-                        block_info[blocks].samples,
-                        block_info[blocks].sumtime.tv_sec,
-                        block_info[blocks].sumtime.tv_nsec,
-                        block_info[blocks].sumsqtime.tv_sec,
-                        block_info[blocks].sumsqtime.tv_nsec);
+                    fprintf(stderr, "block: %zi, samples: %i, average: "
+                        "%f, rel stdev: %f, trunc rel stdev: %f\n", 
+                        blocks,
+                        bi_num_samples(&block_info[blocks]),
+                        bi_average(&block_info[blocks]),
+                        bi_rel_stdev(&block_info[blocks]),
+                        bi_int_rel_stdev(&block_info[blocks]));
                 }
               else
                 {
-                  // subsequent valid reads
-                  block_info[blocks].samples += 1;
-                  sum_time(&(block_info[blocks].sumtime), res);
-                  sqr_time(&res, res);
-                  sum_time(&(block_info[blocks].sumsqtime), res);
+                  // subsequent valid or invalid reads
+                  bi_add_time(&block_info[blocks], time_double(res));
+
                   if (verbosity > 10)
-                    fprintf(stderr, "block: %lli, samples: %i, sumtime: "
-                        "%li.%09li, sumsqtime: %li.%09li\n", 
-                        blocks, 
-                        block_info[blocks].samples,
-                        block_info[blocks].sumtime.tv_sec,
-                        block_info[blocks].sumtime.tv_nsec,
-                        block_info[blocks].sumsqtime.tv_sec,
-                        block_info[blocks].sumsqtime.tv_nsec);
+                    fprintf(stderr, "block: %zi, samples: %i, average: "
+                        "%f, rel stdev: %f, trunc rel stdev: %f\n", 
+                        blocks,
+                        bi_num_samples(&block_info[blocks]),
+                        bi_average(&block_info[blocks]),
+                        bi_rel_stdev(&block_info[blocks]),
+                        bi_int_rel_stdev(&block_info[blocks]));
                 }
               
               diff_time(&res, time1, time2);
 
-              block_info[blocks].valid = next_is_valid;
             }
             
           next_is_valid = 1;
@@ -1221,19 +1656,23 @@ main(int argc, char **argv)
               (max_sectors * sectors * 2.0f);
 
           long long time_to_go;
-          time_to_go = (res.tv_sec*1.0) / percent;
+          time_to_go = (res.tv_sec*1.0) / (percent/min_reads + loop*1.0/min_reads);
 
-          fprintf(stderr,"read %lli sectors, %.3fMiB/s (%.3fMiB/s), %.2f%%, "
-              "in %02li:%02li:%02li, expected time: %02lli:%02lli:%02lli\n",
-             blocks*sectors,
+          fprintf(stderr,"read %lli sectors, %.3fMiB/s (%.3fMiB/s), "
+              "%.2f%% (%.2f%%), "
+              "in %02li:%02li:%02li, loop %i of %lli, "
+              "expected time: %02lli:%02lli:%02lli\n",
+             ((off_t)blocks)*sectors,
              cur_speed,
              speed,
-             percent*100,
+             percent*100, (percent/min_reads + loop*1.0/min_reads) * 100,
              res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
+             loop+1, min_reads,
              time_to_go/3600, time_to_go/60%60, time_to_go%60);
         }
 
-      if (nread == 0 || (max_sectors != 0 && blocks * sectors >= max_sectors ))
+      if (nread == 0 || nread == -1 || blocks >= number_of_blocks
+          || (max_sectors != 0 && blocks * sectors >= max_sectors ))
         {
           long long high_dev=0;
           long long sum_invalid=0;
@@ -1241,12 +1680,10 @@ main(int argc, char **argv)
           // check standard deviation for blocks
           for (int i =0; i < blocks; i++)
             {
-              if (calculate_std_dev(block_info[i].sumtime, 
-                                    block_info[i].sumsqtime, 
-                                    block_info[i].samples) > max_std_dev)
+              if (bi_int_rel_stdev(&block_info[i]) > max_std_dev)
                 high_dev++;
               
-              if (block_info[i].valid == 0)
+              if (bi_is_valid(&block_info[i]) == 0)
                 sum_invalid++;
             }
           if (loop < min_reads || 
@@ -1254,7 +1691,7 @@ main(int argc, char **argv)
               sum_invalid/(blocks*1.0) > 0.10)
             {
               if (
-                  verbosity > 1 && 
+                  verbosity > 0 && 
                   !(loop < min_reads) && 
                   ( high_dev/(blocks*1.0) > 0.25 
                     || sum_invalid/(blocks*1.0) > 0.10)
@@ -1267,7 +1704,7 @@ main(int argc, char **argv)
                 {
                   nread = -1; // exit loop, end of device
                 }
-              // TODO: flush system buffers
+              // TODO: flush system buffers when no direct 
             }
           else
             break;
@@ -1280,181 +1717,227 @@ main(int argc, char **argv)
             }
         }
     }
-  if (verbosity > 1)
-    for(long long i=0; i<blocks; i++)
-      {
-        struct timespec avg;
-        double std_dev;
-
-        std_dev = calculate_std_dev(block_info[i].sumtime, 
-                                    block_info[i].sumsqtime, 
-                                    block_info[i].samples);
-
-        div_time(&avg, block_info[i].sumtime, block_info[i].samples);
-
-        if (std_dev > max_std_dev)
-          {
-            fprintf(stderr, "high std dev for block %lli:%3.9f  "
-                "sumsqtime:%5li.%09li, average: %li.%09li\n", 
-                i, 
-                std_dev,
-                block_info[i].sumsqtime.tv_sec, 
-                block_info[i].sumsqtime.tv_nsec,
-                avg.tv_sec,
-                avg.tv_nsec);
-          }
-      }
   for(int tries=0; tries < max_reads; tries++)
     {
-      fprintf(stderr, "re-trying uncertain blocks re-reads\n");
       struct block_list_t* block_list;
       struct block_info_t* block_data;
 
-      block_list = find_uncertain_blocks(block_info, blocks, max_std_dev, min_reads);
+      if (verbosity >= 0)
+        {
+
+          block_list = find_uncertain_blocks(
+              block_info, blocks, max_std_dev, min_reads, 1);
+
+          if (block_list == NULL)
+            {
+              if (verbosity >2)
+                fprintf(stderr, "no uncertain blocks found\n");
+              break;
+            }
+
+          size_t block_number=0;
+          while (!(block_list[block_number].off == 0 && 
+              block_list[block_number].len == 0))
+            {
+              if (verbosity > 2)
+                {
+                  size_t start = block_list[block_number].off,
+                        end = start + block_list[block_number].len;
+
+                  for(size_t i= start; i< end; i++)
+                    {
+                      double stdev = bi_int_rel_stdev(&block_info[i]);
+
+                      fprintf(stderr, "rel std dev for block %zi: %3.9f"
+                          ", average: %f, valid: %i, samples: %i\n", 
+                          i, 
+                          stdev,
+                          bi_average(&block_info[i]),
+                          bi_is_valid(&block_info[i]),
+                          bi_num_samples(&block_info[i]));
+                    }
+
+                }
+              block_number++;
+            }
+
+          fprintf(stderr, "re-reading %zi uncertain blocks\n", block_number);
+          free(block_list);
+        }
+
+
+      block_list = find_uncertain_blocks(
+          block_info, blocks, max_std_dev, min_reads, 10);
 
       if (block_list == NULL)
-        {
-          if (verbosity > 2)
-            {
-              fprintf(stderr, "no uncertain blocks found\n");
-            }
-          break;
-        }
+        break;
 
       size_t block_number=0;
       while (!(block_list[block_number].off == 0 && 
           block_list[block_number].len == 0))
         {
-          off_t offset, length;
+          size_t offset, length;
           offset = block_list[block_number].off;
           length = block_list[block_number].len;
-          if (verbosity > 1)
-            fprintf(stderr, "processing block no %lli of length %lli\n", offset, length);
+          if (verbosity > 3)
+            fprintf(stderr, "processing block no %zi of length %zi\n", 
+                offset, length);
+          else if ( verbosity >= 0)
+            fprintf(stderr, ".");
 
           block_data = read_blocks(dev_fd, dev_stat_path, offset, length);
           
           if (block_data == NULL)
             {
               if (verbosity > 2)
-                fprintf(stderr, "can't re-read block %lli of length %lli\n", offset, length);
+                fprintf(stderr, 
+                    "\nre-read of block %zi (length %zi) interrupted\n", 
+                    offset, length);
               block_number++;
               continue;
             }
 
           for (int i=0; i < length; i++)
             {
-              if(block_data[i].valid == 1)
+              if(bi_is_valid(&block_data[i]) == 1)
                 {
-                  if (block_info[offset+i].valid == 0)
+                  if (bi_is_valid(&block_info[offset+i]) == 0)
                     {
-                      block_info[offset+i].sumtime.tv_sec = 0;
-                      block_info[offset+i].sumtime.tv_nsec = 0;
-                      block_info[offset+i].sumsqtime.tv_sec = 0;
-                      block_info[offset+i].sumsqtime.tv_nsec = 0;
-                      block_info[offset+i].samples = 0;
-                      block_info[offset+i].valid = 1;
+                      bi_clear(&block_info[offset+i]);
+                      bi_make_valid(&block_info[offset+i]);
                     }
-                  res = block_data[i].sumtime;
-                  sum_time(
-                      &(block_info[offset+i].sumtime), 
-                      res);
-                  res = block_data[i].sumsqtime;
-                  sum_time(
-                      &(block_info[offset+i].sumsqtime), 
-                      res);
-                  block_info[offset+i].samples += block_data[i].samples;
+                  bi_add(&block_info[offset+i],
+                      &block_data[i]);
                 }
             }
+
+
+          for (int i=0; i< length; i++)
+            bi_clear(&block_data[i]);
 
           free(block_data);
           block_number++;
         }
+      if (verbosity <= 3 && verbosity >= 0)
+        fprintf(stderr, "\n");
 
-    free(block_list);
-    if (verbosity > 1)
-      {
-        //fprintf(stderr, "after re-tries:\n");
-        for(long long i=0; i<blocks; i++)
-          {
-            struct timespec avg;
-            float std_dev;
+      free(block_list);
+    }
 
-            std_dev = calculate_std_dev(block_info[i].sumtime,
-                                        block_info[i].sumsqtime,
-                                        block_info[i].samples);
-            div_time(&avg, block_info[i].sumtime, block_info[i].samples);
+  // print uncertain blocks
+  struct block_list_t* block_list;
 
-            if (std_dev > max_std_dev || 
-                avg.tv_sec > 15 || block_info[i].valid == 0)
-              {
-                fprintf(stderr, "high std dev for block %lli:%3.9f  "
-                    "sumsqtime:%5li.%09li, average: %li.%09li, valid: %i, samples: %i\n", 
-                    i,
-                    std_dev,
-                    block_info[i].sumsqtime.tv_sec, 
-                    block_info[i].sumsqtime.tv_nsec,
-                    avg.tv_sec,
-                    avg.tv_nsec,
-                    block_info[i].valid,
-                    block_info[i].samples);
-              }
+  block_list = find_uncertain_blocks(
+      block_info, blocks, max_std_dev, min_reads, 1);
 
-          }
-      }
+  if (block_list == NULL)
+    {
+      fprintf(stderr, "no uncertain blocks found!\n");
+    }
+  else
+    {
+      if (verbosity > 0)
+        fprintf(stderr, "uncertain blocks:\n");
+
+      size_t block_number=0;
+      while (!(block_list[block_number].off == 0 && 
+          block_list[block_number].len == 0))
+        {
+          if (verbosity > 2)
+            {
+              size_t start = block_list[block_number].off,
+                    end = start + block_list[block_number].len;
+
+              for(size_t i= start; i< end; i++)
+                {
+                  double stdev = bi_int_rel_stdev(&block_info[i]);
+
+                  fprintf(stdout, "rel std dev for block %zi: %3.9f"
+                      ", average: %f, valid: %i, samples: %zi\n", 
+                      i, 
+                      stdev,
+                      bi_average(&block_info[i]),
+                      bi_is_valid(&block_info[i]),
+                      bi_num_samples(&block_info[i]));
+                }
+
+            }
+          else
+            {
+              size_t start = block_list[block_number].off,
+                    end = start + block_list[block_number].len;
+
+              for(size_t i= start; i< end; i++)
+                {
+                  fprintf(stdout, "%lli\t%lli\n", ((off_t)i)*sectors,
+                      ((off_t)i+1)*sectors);
+                }
+            }
+          block_number++;
+        }
+
+      if (verbosity > 1)
+        {
+          fprintf(stderr, "%zi uncertain blocks found\n", block_number);
+        }
+
+      free(block_list);
+    }
+
+  clock_gettime(TIMER_TYPE, &timee);
+  if (verbosity > 0)
+    {
+      diff_time(&res, times, timee);
+      fprintf(stderr, "wall time: %lis.%lims.%liµs.%lins\n", res.tv_sec,
+          res.tv_nsec/1000000, res.tv_nsec/1000%1000,
+          res.tv_nsec%1000);
     }
   if (verbosity > 1)
     {
-      fprintf(stderr, "after re-tries:\n");
-      for(long long i=0; i<blocks; i++)
+      long double sum = 0.0;
+      long long reads = 0;
+      struct block_info_t single_block;
+
+      bi_init(&single_block);
+
+      for (size_t i=0; i < blocks; i++)
         {
-          struct timespec avg;
-          float std_dev;
+          sum += bi_sum(&block_info[i]);
+          reads += bi_num_samples(&block_info[i]);
 
-          std_dev = calculate_std_dev(block_info[i].sumtime,
-                                      block_info[i].sumsqtime,
-                                      block_info[i].samples);
-          div_time(&avg, block_info[i].sumtime, block_info[i].samples);
-
-          if (std_dev > max_std_dev || 
-              avg.tv_sec > 15 || block_info[i].valid == 0)
-            {
-              fprintf(stderr, "high std dev for block %lli:%3.9f  "
-                  "sumsqtime:%5li.%09li, average: %li.%09li, valid: %i\n", 
-                  i,
-                  std_dev,
-                  block_info[i].sumsqtime.tv_sec, 
-                  block_info[i].sumsqtime.tv_nsec,
-                  avg.tv_sec,
-                  avg.tv_nsec,
-                  block_info[i].valid);
-            }
-
+          if (bi_num_samples(&block_info[i]) < 5)
+            bi_add_time(&single_block, bi_average(&block_info[i]));
+          else
+            bi_add_time(&single_block, bi_trunc_average(&block_info[i], 0.25));
         }
-    }
-  clock_gettime(TIMER_TYPE, &timee);
-  fprintf(stderr, "sum time: %lis.%lims.%liµs.%lins\n", sumtime.tv_sec,
-      sumtime.tv_nsec/1000000,
-      sumtime.tv_nsec/1000%1000,
-      sumtime.tv_nsec%1000);
-  div_time(&res, sumtime, blocks);
-  fprintf(stderr, "read %lli blocks (%lli errors)\n", blocks, errors);
-  fprintf(stderr, "mean block time: %lis.%lims.%liµs.%lins\n", res.tv_sec,
-      res.tv_nsec/1000000, res.tv_nsec/1000%1000,
-      res.tv_nsec%1000);
-  diff_time(&res, times, timee);
-  fprintf(stderr, "wall time: %lis.%lims.%liµs.%lins\n", res.tv_sec,
-      res.tv_nsec/1000000, res.tv_nsec/1000%1000,
-      res.tv_nsec%1000);
-  sqrt_time(&res, sumsqtime);
-  div_time(&res, res, blocks);
-  fprintf(stderr, "std dev: %.9f(s)\n",
-      calculate_std_dev(sumtime, sumsqtime, blocks));
-  if (verbosity > 2)
-    {
-      fprintf(stderr, "raw read statistics:\n"); 
-      fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
-          "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
-          errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
+
+      double sec = floor(sum / 1000);
+      double msec = floor(sum - sec * 1000);
+      double usec = floor((sum - sec * 1000 - msec)*1000);
+
+      fprintf(stderr, "sum time: %.0fs.%.0fms.%.0fµs\n",
+        sec,
+        msec,
+        usec);
+
+      fprintf(stderr, "read %zi blocks (%lli errors, %lli samples)\n", 
+          blocks, errors, reads);
+
+      sum = bi_average(&single_block);
+
+      sec = floor(sum / 1000);
+      msec = floor(sum - sec * 1000);
+      usec = floor((sum - sec * 1000 - msec)*1000);
+
+      fprintf(stderr, "mean block time: %.0fs.%.0fms.%.0fµs\n",
+        sec,
+        msec,
+        usec);
+
+      fprintf(stderr, "std dev: %.9f(ms)\n",
+          bi_stdev(&single_block));
+
+      bi_clear(&single_block);
     }
   long long sum_invalid=0;
   vvfast=0;
@@ -1466,32 +1949,37 @@ main(int argc, char **argv)
   vvslow=0;
   for (int i=0; i< blocks; i++)
     {
-      if (block_info[i].valid == 0)
+      if (bi_is_valid(&block_info[i]) == 0)
         sum_invalid++;
 
-      div_time(&res, block_info[i].sumtime, block_info[i].samples);
+      double avg;
 
-      if (res.tv_sec < 2) // very very fast read
+      if (bi_num_samples(&block_info[i]) < 5)
+        avg = bi_average(&block_info[i]);
+      else
+        avg = bi_trunc_average(&block_info[i], 0.25);
+
+      if (avg < 2) // very very fast read
         {
           ++vvfast;
         }
-      else if (res.tv_sec < 5) // very fast read
+      else if (avg < 5) // very fast read
         {
           ++vfast;
         }
-      else if (res.tv_sec < 10) // fast read
+      else if (avg < 10) // fast read
         {
           ++fast;
         }
-      else if (res.tv_sec < 25) // normal read
+      else if (avg < 25) // normal read
         {
           ++normal;
         }
-      else if (res.tv_sec < 50) // slow read
+      else if (avg < 50) // slow read
         {
           ++slow;
         }
-      else if (res.tv_sec < 80) // very slow read
+      else if (avg < 80) // very slow read
         {
           ++vslow;
         }
@@ -1500,10 +1988,98 @@ main(int argc, char **argv)
           ++vvslow;
         }
     }
-  fprintf(stderr, "Number of invalid measures because of interrupted reads: %lli\n", sum_invalid);
-  fprintf(stderr, "read statistics:\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
-      "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
-      vvfast, vfast, fast, normal, slow, vslow, vvslow);
+
+  if (verbosity > 0)
+    {
+      fprintf(stderr, "Number of invalid measures because of interrupted "
+          "reads: %lli\n", sum_invalid);
+      fprintf(stderr, "read statistics:\n<2ms: %lli\n<5ms: %lli\n<10ms: %lli\n"
+          "<25ms: %lli\n<50ms: %lli\n<80ms: %lli\n>80ms: %lli\n",
+        vvfast, vfast, fast, normal, slow, vslow, vvslow);
+    }
+
+  if (verbosity > 2)
+    {
+      vvfast=0;
+      vfast=0;
+      fast=0;
+      normal=0;
+      slow=0;
+      vslow=0;
+      vvslow=0;
+
+      long double raw_sum = 0.0;
+      long long samples = 0;
+
+      for (int i=0; i< blocks; i++)
+        {
+          long double partial_sum = 0.0;
+
+          for (int j=0; j< bi_num_samples(&block_info[i]); j++)
+            {
+
+              double avg = bi_get_times(&block_info[i])[j];
+              partial_sum += avg;
+              samples++;
+
+              if (avg < 2) // very very fast read
+                {
+                  ++vvfast;
+                }
+              else if (avg < 5) // very fast read
+                {
+                  ++vfast;
+                }
+              else if (avg < 10) // fast read
+                {
+                  ++fast;
+                }
+              else if (avg < 25) // normal read
+                {
+                  ++normal;
+                }
+              else if (avg < 50) // slow read
+                {
+                  ++slow;
+                }
+              else if (avg < 80) // very slow read
+                {
+                  ++vslow;
+                }
+              else // very very slow read
+                {
+                  ++vvslow;
+                }
+            }
+          raw_sum += partial_sum;
+        }
+
+      fprintf(stderr, "raw read statistics:\n"); 
+      fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
+          "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
+          errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
+
+      double sec = floor(raw_sum / 1000);
+      double msec = floor(raw_sum - sec * 1000);
+      double usec = floor((raw_sum - sec * 1000 - msec)*1000);
+
+      fprintf(stderr, "sum time: %.0fs.%.0fms.%.0fµs\n",
+        sec,
+        msec,
+        usec);
+
+      raw_sum = raw_sum / samples;
+
+      sec = floor(raw_sum / 1000);
+      msec = floor(raw_sum - sec * 1000);
+      usec = floor((raw_sum - sec * 1000 - msec)*1000);
+
+      fprintf(stderr, "mean block time: %.0fs.%.0fms.%.0fµs\n",
+        sec,
+        msec,
+        usec);
+    }
+
 
   if (output != NULL)
     {
@@ -1511,6 +2087,8 @@ main(int argc, char **argv)
     }
 
   free(dev_stat_path);
+  for(int i=0; i< number_of_blocks; i++)
+    bi_clear(&block_info[i]);
   free(block_info);
   free(ibuf_free);
   return 0;
