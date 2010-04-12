@@ -695,7 +695,16 @@ main(int argc, char **argv)
       else if (nread != sectors*512 || ( read_e-read_s != 1 && nodirect == 0) || (read_e-read_s > 4 && nodirect == 1) || write_e != write_s)
         {
           diff_time(&res, time1, time2);
+          if (block_info[blocks].valid == 0)
+            {
+              block_info[blocks].valid = 0;
+              sum_time(&(block_info[blocks].sumtime), &res);
+              sqr_time(&res, res);
+              sum_time(&(block_info[blocks].sumsqtime), &res);
+              block_info[blocks].samples ++;
+            }
           block_info[blocks].valid = 0;
+          diff_time(&res, time1, time2);
           if (nread != sectors*512)
             {
               // seek to start of next block
@@ -710,13 +719,17 @@ main(int argc, char **argv)
       else
         {
           diff_time(&res, time1, time2);
-          block_info[blocks].valid = next_is_valid;
-          block_info[blocks].sumtime = res;
-          sqr_time(&res, res);
-          block_info[blocks].sumsqtime = res;
-          if (lseek(dev_fd, (off_t)512*sectors, SEEK_CUR) < 0)
+          if (block_info[blocks].valid == 0 || (block_info[blocks].valid == 1 && next_is_valid == 1))
             {
-              nread = -1; // exit loop, end of device
+              if (block_info[blocks].valid == 0 && next_is_valid == 1)
+                block_info[blocks].samples = 1;
+              else
+                block_info[blocks].samples ++;
+
+              block_info[blocks].valid = next_is_valid;
+              sum_time(&(block_info[blocks].sumtime), &res);
+              sqr_time(&res, res);
+              sum_time(&(block_info[blocks].sumsqtime), &res);
             }
             
           next_is_valid = 1;
