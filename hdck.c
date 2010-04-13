@@ -154,7 +154,7 @@ usage()
 void
 version(void)
 {
-  printf("hdck 0.2.1\n");
+  printf("hdck 0.2.2\n");
   printf("License GPLv3+: GNU GPL version 3 or later "
       "<http://gnu.org/licenses/gpl.html>.\n");
   printf("This is free software: you are free to change and redistribute it.\n");

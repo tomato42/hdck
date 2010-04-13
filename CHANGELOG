@@ -1,3 +1,9 @@
+v 0.2.2 - 2010-04-10
+--------------------
+
+ * bugfix -- fix overreading re-read blocks
+ * make the program 64 bit compatible (not tested!)
+
 v 0.2.1 - 2010-04-09
 --------------------
 
