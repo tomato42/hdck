@@ -228,7 +228,7 @@ bi_max(struct block_info_t* block_info)
 
   ret = block_info->samples[0];
 
-  for (size_t i=1; i < block_info->samples_len; i++)
+  for (size_t i=0; i < block_info->samples_len; i++)
     if (ret < block_info->samples[i])
       ret = block_info->samples[i];
 

@@ -154,7 +154,7 @@ usage()
 void
 version(void)
 {
-  printf("hdck 0.2.1rc1\n");
+  printf("hdck 0.2.1\n");
   printf("License GPLv3+: GNU GPL version 3 or later "
       "<http://gnu.org/licenses/gpl.html>.\n");
   printf("This is free software: you are free to change and redistribute it.\n");
@@ -784,7 +784,7 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
           (
            (
             bi_num_samples(&block_info[block_no]) > 2 &&
-            bi_max(&block_info[block_no]) < delay / 2
+            bi_max(&block_info[block_no]) < delay / 2.0
            )
            ||
            (
@@ -799,7 +799,11 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
         }
 
       if (!soft_delay &&
-          bi_int_average(&block_info[block_no]) > delay)
+          bi_max(&block_info[block_no]) < delay)
+        continue;
+
+      if (bi_int_average(&block_info[block_no]) > delay ||
+          bi_int_rel_stdev(&block_info[block_no]) > min_std_dev)
         {
           block_list[uncertain].off = block_no;
           block_list[uncertain].len = 1;
@@ -835,8 +839,7 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
                 bi_average(&block_info[block_no+2]);
             }
 
-          if (sum/5.0*4 < bi_average(&block_info[block_no]) ||
-              bi_average(&block_info[block_no]) > delay)
+          if (sum/5.0*4 < bi_average(&block_info[block_no]))
             {
               block_list[uncertain].off = block_no;
               block_list[uncertain].len = 1;
@@ -845,14 +848,6 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
             }
         }
 
-      if (bi_int_rel_stdev(&block_info[block_no]) > min_std_dev ||
-          bi_int_average(&block_info[block_no]) > delay)
-        {
-          block_list[uncertain].off = block_no;
-          block_list[uncertain].len = 1;
-          uncertain++;
-          continue;
-        }
     }
 
   if (uncertain == 0)
@@ -881,7 +876,7 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
     err(1, "write_to_file");
 
   fprintf(handle, "# sector_number, avg, trunc_avg, std_dev, rel_st_dev, "
-      "trunc_st_dev, tries, samples\n");
+      "trunc_st_dev, num_of_samples, samples\n");
 
   for(size_t i=0; i< len; i++)
     {
@@ -1187,7 +1182,7 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
                 1);
           else
             block_list = find_uncertain_blocks(
-                block_info, block_info_size, max_std_dev, min_reads, 1, 0, 1000,
+                block_info, block_info_size, max_std_dev, min_reads, 1, 0, delay,
                 1);
 
 
@@ -1235,7 +1230,7 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
             block_info, block_info_size, max_std_dev, min_reads, 1, 0, delay, 1);
       else
         block_list = find_uncertain_blocks(
-            block_info, block_info_size, max_std_dev, min_reads, 1, 0, 1000, 1);
+            block_info, block_info_size, max_std_dev, min_reads, 1, 0, delay, 1);
 
       if (block_list == NULL)
         break;
