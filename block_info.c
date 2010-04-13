@@ -106,7 +106,7 @@ bi_add(struct block_info_t* sum, struct block_info_t* adder)
       if (!sum->samples)
         err(1, "bi_add");
 
-      for(int i=0; i< adder->samples_len; i++)
+      for(size_t i=0; i< adder->samples_len; i++)
         sum->samples[sum->samples_len + i] = adder->samples[i];
 
       sum->samples_len += adder->samples_len;
@@ -199,7 +199,7 @@ bi_get_times(struct block_info_t* block_info)
 double
 bi_stdev(struct block_info_t* block_info)
 {
-  int n = 0;
+  size_t n = 0;
   long double mean = 0.0;
   long double M2 = 0.0;
   long double delta;
@@ -228,7 +228,7 @@ bi_max(struct block_info_t* block_info)
 
   ret = block_info->samples[0];
 
-  for (size_t i=1; i<block_info->samples_len; i++)
+  for (size_t i=1; i < block_info->samples_len; i++)
     if (ret < block_info->samples[i])
       ret = block_info->samples[i];
 
@@ -241,13 +241,13 @@ bi_max(struct block_info_t* block_info)
 double
 bi_rel_stdev(struct block_info_t* block_info)
 {
-  int n = 0;
+  size_t n = 0;
   long double mean = 0.0;
   long double M2 = 0.0;
   long double delta;
   long double sum = 0.0;
 
-  for (int i=0; i < block_info->samples_len; i++)
+  for (size_t i=0; i < block_info->samples_len; i++)
     {
       n++;
       delta = block_info->samples[i] - mean;
@@ -266,7 +266,7 @@ double
 bi_average(struct block_info_t* block_info)
 {
   long double sum = 0.0;
-  int i;
+  size_t i;
 
   for( i=0; i<block_info->samples_len; i++)
     sum += block_info->samples[i];
@@ -282,7 +282,7 @@ bi_sum(struct block_info_t* block_info)
 {
   long double sum = 0.0;
 
-  for (int i=0; i< block_info->samples_len; i++)
+  for (size_t i=0; i< block_info->samples_len; i++)
     sum += block_info->samples[i];
 
   return sum;
@@ -334,10 +334,10 @@ bi_trunc_average(struct block_info_t* block_info, double percent)
 
   qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
 
-  int low, high;
+  size_t low, high;
 
-  low = ceil(percent / 2 * block_info->samples_len);
-  high = floor(block_info->samples_len - percent / 2 * block_info->samples_len);
+  low = ceill(percent / 2 * block_info->samples_len);
+  high = floorl(block_info->samples_len - percent / 2 * block_info->samples_len);
 
   if (high == low)
     {
@@ -345,7 +345,7 @@ bi_trunc_average(struct block_info_t* block_info, double percent)
       return 0;
     }
 
-  int i;
+  size_t i;
   long double sum = 0.0;
 
   for (i = low; i < high; i++)
@@ -393,10 +393,10 @@ bi_trunc_stdev(struct block_info_t* block_info, double percent)
 
   qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
 
-  int low, high;
+  size_t low, high;
 
-  low = ceil(percent / 2 * block_info->samples_len);
-  high = floor(block_info->samples_len - percent / 2 * block_info->samples_len);
+  low = ceill(percent / 2 * block_info->samples_len);
+  high = floorl(block_info->samples_len - percent / 2 * block_info->samples_len);
 
   if (high == low)
     {
@@ -404,12 +404,12 @@ bi_trunc_stdev(struct block_info_t* block_info, double percent)
       return 0;
     }
 
-  int n = 0;
+  size_t n = 0;
   long double mean = 0.0;
   long double M2 = 0.0;
   long double delta;
 
-  for (int i=low; i < high; i++)
+  for (size_t i=low; i < high; i++)
     {
       n++;
       delta = tmp[i] - mean;
@@ -441,10 +441,10 @@ bi_trunc_rel_stdev(struct block_info_t* block_info, double percent)
 
   qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
 
-  int low, high;
+  size_t low, high;
 
-  low = ceil(percent / 2 * block_info->samples_len);
-  high = floor(block_info->samples_len - percent / 2 * block_info->samples_len);
+  low = ceill(percent / 2 * block_info->samples_len);
+  high = floorl(block_info->samples_len - percent / 2 * block_info->samples_len);
 
   if (high == low)
     {
@@ -452,13 +452,13 @@ bi_trunc_rel_stdev(struct block_info_t* block_info, double percent)
       return 0;
     }
 
-  int n = 0;
+  size_t n = 0;
   long double mean = 0.0;
   long double M2 = 0.0;
   long double delta;
   long double sum = 0.0;
 
-  for (int i=low; i < high; i++)
+  for (size_t i=low; i < high; i++)
     {
       n++;
       delta = tmp[i] - mean;
