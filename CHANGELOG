@@ -1,7 +1,13 @@
+v 0.2.1 - 2010-04-09
+--------------------
+
+ * bigfix -- not rereading blocks that need rereading
+ * code clean up -- removed dead code
+
 v 0.2 - 2010-04-08
 ------------------
 
- * rading and writing uncertian block ranges to file
+ * reading and writing uncertian block ranges to file
  * writing detailed statistics to file
  * `background' mode -- lower priority and less confidence for the results
  * works with single whole disk read, rereads only sectors that are much
