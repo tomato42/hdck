@@ -58,7 +58,7 @@
 #endif
 
 int pagesize = 4096;
-int sectors = 256; ///< number of sectors read per sample
+size_t sectors = 256; ///< number of sectors read per sample
 int verbosity = 0;
 
 int exclusive = 0; ///< use exclusive file access (O_EXCL)
@@ -69,9 +69,9 @@ int write_individual_times_to_file = 1; ///< TODO - cmd option
 int bad_sector_warning = 1; ///< whatever the user was warned about badsectors
 
 /// minimal number of reads for a sector to be qualified as valid
-long long min_reads = 0; 
+size_t min_reads = 0; 
 /// maximal number of re-read tries before the algorith gives up
-long long max_reads = 0; 
+size_t max_reads = 0; 
 /// maximal standard deviation accepted for a block
 double max_std_dev = 0;
 
@@ -278,7 +278,7 @@ set_rt_ioprio(void)
 
 
 /// get file size
-long long
+off_t
 get_file_size(int dev_fd)
 {
   struct stat file_stat;
@@ -314,7 +314,7 @@ get_file_size(int dev_fd)
 char *
 readlink_malloc(char *filename)
 {
-  int size = 100;
+  size_t size = 100;
 
   while (1)
     {
@@ -322,7 +322,7 @@ readlink_malloc(char *filename)
       if (buffer == NULL)
         err(1, "malloc");
 
-      int nchars = readlink (filename, buffer, size);
+      size_t nchars = readlink (filename, buffer, size);
       if (nchars < size)
         {
           if (nchars < 0)
@@ -376,7 +376,7 @@ print_block_list(struct block_list_t* block_list)
 
   while (!(block_list[i].off == 0 && block_list[i].len == 0))
     {
-      fprintf(stderr, "%zi: %ji %ji\n", i, block_list[i].off, block_list[i].len);
+      fprintf(stderr, "%zi: %lli %lli\n", i, block_list[i].off, block_list[i].len);
       i++;
     }
 }
@@ -460,7 +460,7 @@ get_read_writes(char* filepath,
 {
   int fd;
   char buf[4096];
-  int read_bytes;
+  size_t read_bytes;
   fd = open(filepath, O_RDONLY);
   if (fd < 0)
     {
@@ -542,7 +542,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
                 0, SEEK_SET) < 0)
     goto interrupted;
 
-  for (int i=0; i < disk_cache; i++)
+  for (size_t i=0; i < disk_cache; i++)
     {
       nread = read(fd, buffer, sectors*512);
 
@@ -690,7 +690,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
 interrupted:
   free(buffer_free);
-  for(int i=0; i < len; i++)
+  for(size_t i=0; i < len; i++)
     bi_clear(&block_info[i]);
   free(block_info);
   return NULL;
@@ -701,7 +701,7 @@ interrupted:
  * @param glob globbing parameter -- how far can blocks be to be bound together
  */
 struct block_list_t*
-compact_block_list(struct block_list_t* block_list, int glob)
+compact_block_list(struct block_list_t* block_list, size_t glob)
 {
   struct block_list_t* ret = NULL;
   size_t block_list_len = 0;
@@ -756,7 +756,7 @@ compact_block_list(struct block_list_t* block_list, int glob)
  */
 struct block_list_t*
 find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
-    float min_std_dev, int min_reads, int glob, off_t offset, double delay,
+    float min_std_dev, size_t min_reads, size_t glob, off_t offset, double delay,
     int soft_delay)
 {
   struct block_list_t* block_list;
@@ -895,7 +895,7 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
       else
         trunc_avg = bi_trunc_average(&block_info[i], 0.25);
 
-      fprintf(handle, "%i\t%f\t%f\t%f\t%f\t%f\t%i",
+      fprintf(handle, "%zi\t%f\t%f\t%f\t%f\t%f\t%zi",
           i,
           bi_average(&block_info[i]),
           trunc_avg,
@@ -907,7 +907,7 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
         {
           double* times;
           times = bi_get_times(&block_info[i]);
-          for(int l=0; l<bi_num_samples(&block_info[i]); l++)
+          for(size_t l=0; l<bi_num_samples(&block_info[i]); l++)
             fprintf(handle, " %f", times[l]);
         }
       fprintf(handle, "\n");
@@ -1008,7 +1008,7 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
   off_t total_blocks = 0; ///< total number of blocks to be read (with overhead)
   off_t blocks_read = 0; ///< number of blocks read (with overhead)
   struct block_list_t* tmp_block_list; ///< compacted block_list
-  static int max_len = 4; ///< globbing param for compacting
+  static size_t max_len = 4; ///< globbing param for compacting
   /// disk cache size in blocks
   off_t disk_cache = disk_cache_size * 1024 * 1024 / sectors / 512;
   struct timespec start_time, end_time, res; ///< expected time calculation
@@ -1180,7 +1180,7 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
         }
 
       // free the block_data structure
-      for (int i=0; i< length; i++)
+      for (size_t i=0; i< length; i++)
         bi_clear(&block_data[i]);
 
       free(block_data);
@@ -1193,12 +1193,12 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
 
 void
 perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_info,
-    size_t block_info_size, int re_reads, double max_std_dev, short int min_reads,
+    size_t block_info_size, size_t re_reads, double max_std_dev, size_t min_reads,
     double delay)
 {
   struct block_list_t* block_list;
 
-  for(int tries=0; tries < re_reads; tries++)
+  for(size_t tries=0; tries < re_reads; tries++)
     {
       // print statistics before processing
       if (verbosity >= 0)
@@ -1236,7 +1236,7 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
                       double stdev = bi_int_rel_stdev(&block_info[i]);
 
                       fprintf(stderr, "rel std dev for block %zi: %3.9f"
-                          ", average: %f, valid: %i, samples: %i\n", 
+                          ", average: %f, valid: %i, samples: %zi\n", 
                           i, 
                           stdev,
                           bi_average(&block_info[i]),
@@ -1286,7 +1286,7 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
  */
 void
 read_whole_disk(int dev_fd, struct block_info_t* block_info, 
-    char* dev_stat_path, int loops, int sector_times, off_t max_sectors,
+    char* dev_stat_path, size_t loops, int sector_times, off_t max_sectors,
     off_t filesize)
 {
   char *ibuf; ///< input buffer for sector reading
@@ -1299,7 +1299,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
        read_sec_e=0; ///< device read sectors (at the end)
   int next_is_valid=1; ///< whatever am erronous read occured and next sector
                        ///< can contain seek time
-  int loop=0; ///< loop number
+  size_t loop=0; ///< loop number
   struct timespec time1, time2, /**< time it takes to read single block */
                   res; /**< temp result */
   off_t nread; ///< number of bytes the read() managed to read
@@ -1430,7 +1430,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
                   bi_add_time(&block_info[blocks], time_double(res));
 
                   if (verbosity > 10)
-                    fprintf(stderr, "block: %zi, samples: %i, average: "
+                    fprintf(stderr, "block: %zi, samples: %zi, average: "
                         "%f, rel stdev: %f, trunc rel stdev: %f\n", 
                         blocks,
                         bi_num_samples(&block_info[blocks]),
@@ -1444,7 +1444,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
                   bi_add_time(&block_info[blocks], time_double(res));
 
                   if (verbosity > 10)
-                    fprintf(stderr, "block: %zi, samples: %i, average: "
+                    fprintf(stderr, "block: %zi, samples: %zi, average: "
                         "%f, rel stdev: %f, trunc rel stdev: %f\n", 
                         blocks,
                         bi_num_samples(&block_info[blocks]),
@@ -1526,7 +1526,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
 
           fprintf(stderr,"read %lli sectors, %.3fMiB/s (%.3fMiB/s), "
               "%.2f%% (%.2f%%), "
-              "in %02li:%02li:%02li, loop %i of %lli, "
+              "in %02li:%02li:%02li, loop %zi of %zi, "
               "expected time: %02lli:%02lli:%02lli\n",
              ((off_t)blocks)*sectors,
              cur_speed,
@@ -1544,7 +1544,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
           long long sum_invalid=0;
           loop++;
           // check standard deviation for blocks
-          for (int i =0; i < blocks; i++)
+          for (size_t i =0; i < blocks; i++)
             {
               if (bi_int_rel_stdev(&block_info[i]) > max_std_dev)
                 high_dev++;
@@ -1584,7 +1584,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
 
           if (loop > max_reads)
             {
-              fprintf(stderr, "Warning; read whole disk %lli times, still "
+              fprintf(stderr, "Warning; read whole disk %zi times, still "
                   "can't get high confidence\n", max_reads);
               break;
             }
@@ -1885,8 +1885,14 @@ main(int argc, char **argv)
   filesize = floorl(filesize*1.L/512/sectors)*512*sectors;
   if (!filesize)
     {
-      fprintf(stderr, "Device too small, needs to be at least %i bytes in size\n",
-          512*sectors);
+      fprintf(stderr, "Device too small, needs to be at least %lli bytes in size\n",
+          ((off_t)512)*sectors);
+      exit(EXIT_FAILURE);
+    }
+
+  if (filesize / 512 / sectors * 2 > (off_t)SIZE_MAX)
+    {
+      fprintf(stderr, "File too big, please try again using 64 bit OS\n");
       exit(EXIT_FAILURE);
     }
 
@@ -1920,7 +1926,7 @@ main(int argc, char **argv)
 
   if (verbosity > 2)
     {
-      fprintf(stderr, "min-reads: %lli, max re-reads: %lli, max rel std dev %f, "
+      fprintf(stderr, "min-reads: %zi, max re-reads: %zi, max rel std dev %f, "
           "disk cache size: %ziMiB\n",
          min_reads,
          max_reads,
@@ -1950,7 +1956,7 @@ main(int argc, char **argv)
           exit(EXIT_FAILURE);
         }
 
-      for (int i=0; i<min_reads; i++)
+      for (size_t i=0; i<min_reads; i++)
         read_block_list(dev_fd, block_list, block_info, dev_stat_path,
             number_of_blocks);
 
@@ -2101,7 +2107,7 @@ main(int argc, char **argv)
   vslow=0;
   vvslow=0;
   errors=0;
-  for (int i=0; i< number_of_blocks; i++)
+  for (size_t i=0; i< number_of_blocks; i++)
     {
       if (!bi_is_initialised(&block_info[i]))
         continue;
@@ -2171,14 +2177,14 @@ main(int argc, char **argv)
       long double raw_sum = 0.0;
       long long samples = 0;
 
-      for (int i=0; i< number_of_blocks; i++)
+      for (size_t i=0; i< number_of_blocks; i++)
         {
           if (!bi_is_initialised(&block_info[i]))
             continue;
 
           long double partial_sum = 0.0;
 
-          for (int j=0; j< bi_num_samples(&block_info[i]); j++)
+          for (size_t j=0; j< bi_num_samples(&block_info[i]); j++)
             {
 
               double avg = bi_get_times(&block_info[i])[j];
@@ -2251,7 +2257,7 @@ main(int argc, char **argv)
     }
 
   free(dev_stat_path);
-  for(int i=0; i< number_of_blocks; i++)
+  for(size_t i=0; i< number_of_blocks; i++)
     bi_clear(&block_info[i]);
   free(block_info);
   return 0;
