@@ -212,7 +212,7 @@ bi_stdev(struct block_info_t* block_info)
       M2 += delta * (block_info->samples[i] - mean); 
     }
   
-  return sqrt(M2 / n);
+  return sqrt(M2 / (n - 1));
 }
 
 /**
@@ -256,7 +256,7 @@ bi_rel_stdev(struct block_info_t* block_info)
       sum += block_info->samples[i];
     }
   
-  return (sqrt(M2 / n)) / ( sum / n);
+  return (sqrt(M2 / (n - 1))) / (sum / n);
 }
 
 /** 
@@ -419,7 +419,7 @@ bi_trunc_stdev(struct block_info_t* block_info, double percent)
 
   free(tmp);
   
-  return sqrt(M2 / n);
+  return sqrt(M2 / (n - 1));
 }
 
 /** 
@@ -469,7 +469,7 @@ bi_trunc_rel_stdev(struct block_info_t* block_info, double percent)
 
   free(tmp);
   
-  return (sqrt(M2 / n)) / (sum / n);
+  return (sqrt(M2 / (n - 1))) / (sum / n);
 }
 
 /** 

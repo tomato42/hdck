@@ -369,6 +369,18 @@ read_link(char* link)
     }
 }
 
+void
+print_block_list(struct block_list_t* block_list)
+{
+  size_t i = 0;
+
+  while (!(block_list[i].off == 0 && block_list[i].len == 0))
+    {
+      fprintf(stderr, "%zi: %ji %ji\n", i, block_list[i].off, block_list[i].len);
+      i++;
+    }
+}
+
 char*
 get_file_stat_sys_name(char* filename)
 {
@@ -714,15 +726,10 @@ compact_block_list(struct block_list_t* block_list, int glob)
         continue;
 
       // check if we can extend the last block to contain current one
-      if (block_list[i].off <= ret[ret_len-1].off + ret[ret_len-1].len + glob
-         && ret[ret_len-1].len < glob)
+      if (block_list[i].off <= ret[ret_len-1].off + glob)
         {
-          ret[ret_len-1].len += block_list[i].off 
-                                - (ret[ret_len-1].off + ret[ret_len-1].len)
-                                + 1;
-
-//          if (ret[ret_len-1].len + ret[ret_len-1].off >= block_list_len)
-//            ret[ret_len-1].len = block_list_len - ret[ret_len-1].off;
+          ret[ret_len-1].len = block_list[i].off + block_list[i].len
+              - ret[ret_len-1].off; 
           continue;
         }
 
@@ -1001,14 +1008,21 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
   off_t total_blocks = 0; ///< total number of blocks to be read (with overhead)
   off_t blocks_read = 0; ///< number of blocks read (with overhead)
   struct block_list_t* tmp_block_list; ///< compacted block_list
-  int max_len = 4; ///< globbing param for compacting
+  static int max_len = 4; ///< globbing param for compacting
   /// disk cache size in blocks
   off_t disk_cache = disk_cache_size * 1024 * 1024 / sectors / 512;
   struct timespec start_time, end_time, res; ///< expected time calculation
   size_t block_number=0; ///< position in the block_list
   struct block_info_t* block_data; ///< stats for sectors read
 
+  if (verbosity > 6)
+    print_block_list(block_list);
   tmp_block_list = compact_block_list(block_list, max_len * 2);
+  if (verbosity > 6)
+    {
+      fprintf(stderr, "after compacting:\n");
+      print_block_list(tmp_block_list);
+    }
 
   for (size_t i=0; !(tmp_block_list[i].off==0 && tmp_block_list[i].len==0); i++)
     total_blocks += tmp_block_list[i].len + disk_cache + 3;
@@ -1089,9 +1103,16 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
             {
               max_len /= 2;
               off_t beginning = tmp_block_list[block_number].off;
+              if (verbosity > 7)
+                print_block_list(tmp_block_list);
               free(tmp_block_list);
 
               tmp_block_list = compact_block_list(block_list, max_len);
+              if (verbosity > 7)
+                {
+                  fprintf(stderr, "after compacting:\n");
+                  print_block_list(tmp_block_list);
+                }
 
               if (tmp_block_list == NULL)
                 break;
@@ -1118,9 +1139,16 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
             {
               max_len *= 2;
               off_t beginning = tmp_block_list[block_number].off;
+              if (verbosity > 7)
+                print_block_list(tmp_block_list);
               free(tmp_block_list);
 
               tmp_block_list = compact_block_list(block_list, max_len);
+              if (verbosity > 7)
+                {
+                  fprintf(stderr, "after compacting:\n");
+                  print_block_list(tmp_block_list);
+                }
 
               if (tmp_block_list == NULL)
                 break;
