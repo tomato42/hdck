@@ -55,6 +55,7 @@
 int pagesize = 4096;
 size_t sectors = 256; ///< number of sectors read per sample
 int verbosity = 0;
+int detailed_uncertain = 1;
 
 int exclusive = 0; ///< use exclusive file access (O_EXCL)
 int nodirect = 0; ///< don't use O_DIRECT access
@@ -736,6 +737,8 @@ compact_block_list(struct block_list_t* block_list, size_t glob)
   return ret;
 }
 
+
+
 /**
  * @param block_info block statistics
  * @param block_info_len block_info length
@@ -746,13 +749,16 @@ compact_block_list(struct block_list_t* block_list, size_t glob)
  * @param glob how close sectors have to be near them to be bundled together
  * @param offset minimal address to consider
  * @param delay read delay for the block to be considered uncertain 
+ * @param soft_delay (flag) ignore blocks that don't have a single read above 
+ *      the delay (are unlikely to be really bad)
+ * @param certain_bad (flag) add blocks that are certainly bad
  * @return null if there were no blocks meeting the criteria, null terimated list
  * otherwise
  */
 struct block_list_t*
-find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
+find_bad_blocks(struct block_info_t* block_info, size_t block_info_len,
     float min_std_dev, size_t min_reads, size_t glob, off_t offset, double delay,
-    int soft_delay)
+    int soft_delay, int certain_bad)
 {
   struct block_list_t* block_list;
   struct block_list_t* ret;
@@ -771,6 +777,7 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
       if (!bi_is_initialised(&block_info[block_no]))
         continue;
 
+      // re-read blocks that didn't recive their share of proper reads
       if (bi_num_samples(&block_info[block_no]) < min_reads ||
           !bi_is_valid(&block_info[block_no]))
         {
@@ -800,9 +807,16 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
           continue;
         }
 
+      // do not re-read blocks if we look for uncertain only and standard 
+      // deviation is low
+      if (certain_bad == 0 && 
+          bi_int_rel_stdev(&block_info[block_no]) <= min_std_dev)
+            continue;
+
       if (!soft_delay &&
           bi_max(&block_info[block_no]) < delay)
         continue;
+
 
       if (bi_int_average(&block_info[block_no]) > delay ||
           bi_int_rel_stdev(&block_info[block_no]) > min_std_dev)
@@ -866,6 +880,30 @@ find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
   free(block_list);
 
   return ret;
+}
+
+/** Find blocks that could be bad
+ * @param block_info block statistics
+ * @param block_info_len block_info length
+ * @param min_std_dev minimal standard deviation for a block to be cosidered 
+ * uncertain
+ * @param min_reads minimal number of reads for a block to be considered
+ * checked
+ * @param glob how close sectors have to be near them to be bundled together
+ * @param offset minimal address to consider
+ * @param delay read delay for the block to be considered uncertain 
+ * @param soft_delay (flag) ignore blocks that don't have a single read above 
+ *      the delay (are unlikely to be really bad)
+ * @return null if there were no blocks meeting the criteria, null terimated list
+ * otherwise
+ */
+struct block_list_t*
+find_uncertain_blocks(struct block_info_t* block_info, size_t block_info_len,
+    float min_std_dev, size_t min_reads, size_t glob, off_t offset, double delay,
+    int soft_delay)
+{
+  return find_bad_blocks(block_info, block_info_len, min_std_dev,
+      min_reads, glob, offset, delay, soft_delay, 0);
 }
 
 void
@@ -1231,11 +1269,11 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
                       double stdev = bi_int_rel_stdev(&block_info[i]);
 
                       fprintf(stderr, "rel std dev for block %zi: %3.9f"
-                          ", average: %f, valid: %i, samples: %zi\n", 
+                          ", average: %f, valid: %s, samples: %zi\n", 
                           i, 
                           stdev,
                           bi_average(&block_info[i]),
-                          bi_is_valid(&block_info[i]),
+                          (bi_is_valid(&block_info[i]))?"yes":"no",
                           bi_num_samples(&block_info[i]));
                     }
 
@@ -1962,12 +2000,12 @@ main(int argc, char **argv)
       max_reads, max_std_dev, min_reads, rotational_delay);
 
 
-  // print uncertain blocks
+  // print uncertain and bad blocks
   struct block_list_t* block_list;
 
-  block_list = find_uncertain_blocks(
+  block_list = find_bad_blocks(
       block_info, number_of_blocks, max_std_dev, min_reads, 1, 0,
-      rotational_delay, 0);
+      rotational_delay, 0, 1);
 
   if (block_list == NULL)
     {
@@ -1994,7 +2032,7 @@ main(int argc, char **argv)
       while (!(block_list[block_number].off == 0 && 
           block_list[block_number].len == 0))
         {
-          if (verbosity > 2)
+          if (verbosity > 2 || detailed_uncertain == 1)
             {
               size_t start = block_list[block_number].off,
                     end = start + block_list[block_number].len;
@@ -2003,12 +2041,13 @@ main(int argc, char **argv)
                 {
                   double stdev = bi_int_rel_stdev(&block_info[i]);
 
-                  fprintf(stdout, "rel std dev for block %zi: %3.9f"
-                      ", average: %f, valid: %i, samples: %zi\n", 
-                      i, 
+                  fprintf(stdout, "rel std dev for block %zi (LBA: %lli-%lli): %3.9f"
+                      ", average: %f, valid: %s, samples: %zi\n", 
+                      i,
+                      ((off_t)i)*sectors,((off_t)i+1)*sectors-1,
                       stdev,
                       bi_average(&block_info[i]),
-                      bi_is_valid(&block_info[i]),
+                      (bi_is_valid(&block_info[i]))?"yes":"no",
                       bi_num_samples(&block_info[i]));
                 }
 
@@ -2153,7 +2192,7 @@ main(int argc, char **argv)
     {
       fprintf(stderr, "Number of invalid measures because of interrupted "
           "reads: %lli\n", sum_invalid);
-      fprintf(stderr, "read statistics:\n<2ms: %lli\n<5ms: %lli\n<10ms: %lli\n"
+      fprintf(stderr, "read statistics:\n<2ms:  %lli\n<5ms:  %lli\n<10ms: %lli\n"
           "<25ms: %lli\n<50ms: %lli\n<80ms: %lli\n>80ms: %lli\nERR: %lli\n",
         vvfast, vfast, fast, normal, slow, vslow, vvslow, errors);
     }
@@ -2220,7 +2259,7 @@ main(int argc, char **argv)
         }
 
       fprintf(stderr, "raw read statistics:\n"); 
-      fprintf(stderr, "ERR: %lli\n2ms: %lli\n5ms: %lli\n10ms: %lli\n25ms: %lli\n"
+      fprintf(stderr, "ERR: %lli\n2ms:  %lli\n5ms:  %lli\n10ms: %lli\n25ms: %lli\n"
           "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
           errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
 
