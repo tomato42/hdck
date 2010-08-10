@@ -1,3 +1,9 @@
+v 0.2.3 - 2010-08-11
+--------------------
+
+ * reduce number of unnecessery re-reads
+ * add licences to files
+
 v 0.2.2 - 2010-04-10
 --------------------
 
@@ -7,7 +13,7 @@ v 0.2.2 - 2010-04-10
 v 0.2.1 - 2010-04-09
 --------------------
 
- * bigfix -- not rereading blocks that need rereading
+ * bugfix -- not rereading blocks that need rereading
  * code clean up -- removed dead code
 
 v 0.2 - 2010-04-08
