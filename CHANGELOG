@@ -1,3 +1,10 @@
+v 0.2.4 - 2010-08-11
+--------------------
+
+ * make output more human readable
+ * fix the problem with maximum number of block reads being 
+   min-reads + max-reads
+
 v 0.2.3 - 2010-08-11
 --------------------
 
