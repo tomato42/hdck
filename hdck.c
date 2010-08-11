@@ -111,7 +111,7 @@ usage()
   printf("--sector-times      print time it takes to read each group of"
                                                         " sectors (in µs)\n");
   printf("--min-reads NUM     minimal number of valid reads for a sector\n");
-  printf("--max-reads NUM     maximal number of re-reads for a sector\n");
+  printf("--max-reads NUM     maximal number of additional re-reads for a sector\n");
   printf("--max-std-deviation NUM minimal relative stdandard deviation for "
       "a sector to be\n");
   printf("                    considered valid\n");
@@ -549,7 +549,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
           
           if (bad_sector_warning)
             {
-              fprintf(stderr, "BAD SECTORS reads may not be accurate!\n");
+              fprintf(stderr, "BAD SECTORS! Reads may not be accurate!\n");
               bad_sector_warning = 0;
             }
 
@@ -574,7 +574,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
       if (bad_sector_warning)
         {
-          fprintf(stderr, "BAD SECTORS reds may not be accurate!\n");
+          fprintf(stderr, "BAD SECTORS! Reads may not be accurate!\n");
           bad_sector_warning = 0;
         }
 
@@ -622,7 +622,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
           if (bad_sector_warning)
             {
-              fprintf(stderr, "BAD SECTORS reads may not be accurate!\n");
+              fprintf(stderr, "BAD SECTORS! Reads may not be accurate!\n");
               bad_sector_warning = 0;
             }
 
@@ -737,8 +737,6 @@ compact_block_list(struct block_list_t* block_list, size_t glob)
   return ret;
 }
 
-
-
 /**
  * @param block_info block statistics
  * @param block_info_len block_info length
@@ -817,7 +815,6 @@ find_bad_blocks(struct block_info_t* block_info, size_t block_info_len,
           bi_max(&block_info[block_no]) < delay)
         continue;
 
-
       if (bi_int_average(&block_info[block_no]) > delay ||
           bi_int_rel_stdev(&block_info[block_no]) > min_std_dev)
         {
@@ -863,7 +860,6 @@ find_bad_blocks(struct block_info_t* block_info, size_t block_info_len,
               continue;
             }
         }
-
     }
 
   if (uncertain == 0)
@@ -1401,7 +1397,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
 
               if (bad_sector_warning)
                 {
-                  fprintf(stderr, "BAD SECTORS reads may not be accurate!\n");
+                  fprintf(stderr, "BAD SECTORS! Reads may not be accurate!\n");
                   bad_sector_warning = 0;
                 }
 
