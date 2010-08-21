@@ -2073,7 +2073,7 @@ main(int argc, char **argv)
 
       fflush(stdout);
 
-      if (verbosity > 1)
+      if (verbosity >= 0)
         {
           fprintf(stderr, "\n%zi uncertain blocks found", block_number);
         }
@@ -2140,13 +2140,13 @@ main(int argc, char **argv)
       bi_clear(&single_block);
     }
   long long sum_invalid=0;
-  vvfast=0;
-  vfast=0;
-  fast=0;
-  normal=0;
-  slow=0;
-  vslow=0;
-  vvslow=0;
+  vvfast=0; /* less than one fourth th rotational delay */
+  vfast=0;  /* less than half the rotational delay */
+  fast=0;   /* less than rotational delay */
+  normal=0; /* less than 2 * rotational delay */
+  slow=0;   /* less than 4 * rotational delay */
+  vslow=0;  /* less than 6 * rotational delay */
+  vvslow=0; /* more than 6 * rotational delay */
   errors=0;
   for (size_t i=0; i< number_of_blocks; i++)
     {
@@ -2165,27 +2165,27 @@ main(int argc, char **argv)
 
       errors += bi_get_error(&block_info[i]);
 
-      if (avg < 2) // very very fast read
+      if (avg < rotational_delay / 4) // very very fast read
         {
           ++vvfast;
         }
-      else if (avg < 5) // very fast read
+      else if (avg < rotational_delay / 2) // very fast read
         {
           ++vfast;
         }
-      else if (avg < 10) // fast read
+      else if (avg < rotational_delay) // fast read
         {
           ++fast;
         }
-      else if (avg < 25) // normal read
+      else if (avg < rotational_delay * 2) // normal read
         {
           ++normal;
         }
-      else if (avg < 50) // slow read
+      else if (avg < rotational_delay * 4) // slow read
         {
           ++slow;
         }
-      else if (avg < 80) // very slow read
+      else if (avg < rotational_delay * 6) // very slow read
         {
           ++vslow;
         }
@@ -2197,11 +2197,55 @@ main(int argc, char **argv)
 
   if (verbosity > 0 || detailed_uncertain == 1)
     {
-      fprintf(stderr, "\nNumber of invalid measures because of detected interrupted "
-          "reads: %lli", sum_invalid);
-      fprintf(stderr, "\nIndividual read statistics:\n<2ms:  %lli\n<5ms:  %lli\n<10ms: %lli\n"
-          "<25ms: %lli\n<50ms: %lli\n<80ms: %lli\n>80ms: %lli\nERR: %lli",
-        vvfast, vfast, fast, normal, slow, vslow, vvslow, errors);
+      fprintf(stderr, "\nNumber of invalid measures because of detected "
+          "interrupted reads: %lli", sum_invalid);
+      fprintf(stderr, "\nIndividual block statistics:\n<%02.2fms: %lli\n"
+          "<%02.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n"
+          "<%2.2fms: %lli\n>%2.2fms: %lli\nERR: %lli",
+        rotational_delay / 4, vvfast, rotational_delay / 2, vfast,
+        rotational_delay, fast, rotational_delay * 2, normal,
+        rotational_delay * 4, slow, rotational_delay * 6, vslow, 
+        rotational_delay * 6, vvslow, errors);
+
+      fprintf(stderr, "\n\nDiagnosis: ");
+      if (errors != 0)
+        {
+          fprintf(stderr, "CAUTION! Bad sectors detected, copy data off this "
+              "disk AS SOON AS POSSIBLE!");
+        }
+      else if (vvslow != 0)
+        {
+          fprintf(stderr, "CAUTION! Sectors that required more than 6 read "
+              "attempts detected, drive may be ALREADY FAILING!");
+        }
+      else if (vslow != 0)
+        {
+          fprintf(stderr, "sectors that required more than 4 read attempts "
+              "detected, drive is in very bad condition!");
+        }
+      else if (slow != 0)
+        {
+          fprintf(stderr, "sectors that required more than 2 read attempts "
+              "detected, drive is in bad condition");
+        }
+      else if ((normal * 1.0) / (number_of_blocks * 1.0) > 0.001)
+        {
+          fprintf(stderr, "high number of blocks that required more than 1 "
+              "read attempt detected, drive is in moderate condition");
+        }
+      else if (normal == 0)
+        {
+          if ((fast * 1.0) / (number_of_blocks * 1.0) < 0.1)
+            {
+              fprintf(stderr, "Drive is in excellent condition");
+            }
+          else
+            fprintf(stderr, "no blocks that required constant re-reads "
+                "detected, drive is in very good condition");
+        }
+      else
+        fprintf(stderr, "few blocks that required more than 1 read attempt "
+            "detected, drive is in good condition");
     }
 
   if (verbosity > 2)
