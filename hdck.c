@@ -51,6 +51,8 @@
 #else
 #define PURE FUNCTION
 #endif
+#define CLEAR_LINE "\033[2K"
+#define CLEAR_LINE_END "\033[K"
 
 int pagesize = 4096;
 size_t sectors = 256; ///< number of sectors read per sample
@@ -84,6 +86,36 @@ enum {
     PRINT_SYMBOLS
 };
 
+/** Move cursor up */
+char*
+cursor_up(int x)
+{
+  static char ret[16];
+  int error;
+  error = snprintf(ret, 16, "\033[%iA", x);
+  if (error > 16 || error < 0)
+    {
+      fprintf(stderr, "cursor_up: parameter too large\n");
+      exit(EXIT_FAILURE);
+    }
+  return ret;
+}
+
+/** Move cursor down */
+char*
+cursor_down(int x)
+{
+  static char ret[16];
+  int error;
+  error = snprintf(ret, 16, "\033[%iB", x);
+  if (error > 16 || error < 0)
+    {
+      fprintf(stderr, "cursor_down: parameter too large\n");
+      exit(EXIT_FAILURE);
+    }
+  return ret;
+}
+
 /** Print usage information
  */
 void
@@ -116,7 +148,8 @@ usage()
       "a sector to be\n");
   printf("                    considered valid\n");
   printf("--max-sectors NUM   read at most NUM sectors\n");
-  printf("--disk-cache NUM    size of the on-board disk cache (32MiB default)\n");
+  printf("--disk-cache NUM    size of the on-board disk cache in MiB (default"
+      " 32)\n");
   printf("--disk-rpm NUM      disk RPM (7200 by default)\n");
   printf("--noverbose         reduce verbosity\n");
   printf("-v, --verbose       be more verbose\n");
@@ -249,7 +282,7 @@ make_real_time(void)
   struct sched_param sp;
   sp.sched_priority = 31;
   if (sched_setscheduler(0,SCHED_FIFO,&sp) < 0)
-    err(1, "scheduler");
+    err(EXIT_FAILURE, "scheduler");
 }
 
 void
@@ -259,7 +292,7 @@ set_affinity(void)
   CPU_ZERO(&cpu_set); // zero the CPU set
   CPU_SET(0, &cpu_set); // add first cpu to the set
   if (sched_setaffinity(0,sizeof(cpu_set_t), &cpu_set) <0)
-    err(1, "affinity");
+    err(EXIT_FAILURE, "affinity");
 }
 
 void
@@ -269,7 +302,7 @@ set_rt_ioprio(void)
                0, 
                IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0)
       ) != 0)
-  err(1, "ioprio: can't make process IO class real-time");
+  err(EXIT_FAILURE, "ioprio: can't make process IO class real-time");
 }
 
 
@@ -280,25 +313,25 @@ get_file_size(int dev_fd)
   struct stat file_stat;
   off_t filesize;
   if (fstat(dev_fd, &file_stat) == -1)
-    err(1, "fstat");
+    err(EXIT_FAILURE, "fstat");
   if (S_ISREG(file_stat.st_mode))
     {
       filesize = file_stat.st_size;
-      if (verbosity > 1)
+      if (verbosity > 2)
         {
-          printf("\nfile size: %lli bytes", file_stat.st_size);
+          printf("file size: %lli bytes\n", file_stat.st_size);
         }
     }
   else if (S_ISBLK(file_stat.st_mode))
     {
       if (ioctl(dev_fd, BLKGETSIZE64, &filesize) == -1)
-        err(1, "ioctl: BLKGETSIZE64");
-      if (verbosity > 1)
-        printf("\nfile size: %lli bytes", filesize);
+        err(EXIT_FAILURE, "ioctl: BLKGETSIZE64");
+      if (verbosity > 2)
+        printf("file size: %lli bytes\n", filesize);
     }
   else
     {
-      printf("%s: %s: File is neither device file nor regular file\n", 
+      fprintf(stderr, "%s: %s: File is neither device file nor regular file\n", 
           __FILE__, "main");
       exit(EXIT_FAILURE);
     }
@@ -316,13 +349,13 @@ readlink_malloc(char *filename)
     {
       char *buffer = (char *) malloc (size);
       if (buffer == NULL)
-        err(1, "malloc");
+        err(EXIT_FAILURE, "malloc");
 
       size_t nchars = readlink (filename, buffer, size);
       if (nchars < size)
         {
           if (nchars < 0)
-            err(1, "readlink");
+            err(EXIT_FAILURE, "readlink");
           else
             {
               buffer[nchars]='\0';
@@ -345,12 +378,12 @@ read_link(char* link)
       buf = malloc(bufsize);
       if (buf == NULL)
         {
-          err(1, "malloc");
+          err(EXIT_FAILURE, "malloc");
         }
       ret = readlink(link, buf, bufsize);
 
       if (ret == -1)
-        err(1, "readlink");
+        err(EXIT_FAILURE, "readlink");
 
       if (ret < bufsize-1)
         {
@@ -372,7 +405,7 @@ print_block_list(struct block_list_t* block_list)
 
   while (!(block_list[i].off == 0 && block_list[i].len == 0))
     {
-      fprintf(stderr, "\n%zi: %lli %lli", i, block_list[i].off, block_list[i].len);
+      printf("%zi: %lli %lli\n", i, block_list[i].off, block_list[i].len);
       i++;
     }
 }
@@ -388,7 +421,7 @@ get_file_stat_sys_name(char* filename)
   const char sys_stat[] = "/stat";
 
   if(stat(filename, &file_stat) == -1)
-    err(1, "stat");
+    err(EXIT_FAILURE, "stat");
 
   if (S_ISLNK(file_stat.st_mode))
     {
@@ -396,11 +429,11 @@ get_file_stat_sys_name(char* filename)
     }
 
   if(stat(filename, &file_stat) == -1)
-    err(1, "stat");
+    err(EXIT_FAILURE, "stat");
 
   if (S_ISLNK(file_stat.st_mode))
     {
-      err(1, "circular reference");
+      err(EXIT_FAILURE, "circular reference");
     }
 
   if (!S_ISBLK(file_stat.st_mode))
@@ -414,12 +447,12 @@ get_file_stat_sys_name(char* filename)
   
   if (verbosity > 2)
     {
-      printf("\ndevice name %s", name);
+      printf("device name %s\n", name);
     }
   
   stat_sys_name = malloc(strlen(name) + strlen(sys_path) + strlen(sys_stat) + 1);
   if (stat_sys_name == NULL)
-    err(1, "malloc");
+    err(EXIT_FAILURE, "malloc");
 
   stat_sys_name[0]='\0';
   strcat(stat_sys_name, sys_path);
@@ -428,7 +461,7 @@ get_file_stat_sys_name(char* filename)
 
   if (verbosity > 2)
     {
-      printf("\nstat device to open %s", stat_sys_name);
+      printf("stat device to open %s\n", stat_sys_name);
     }
 
   // check if file exists
@@ -441,7 +474,7 @@ get_file_stat_sys_name(char* filename)
         }
       else
         {
-          err(1, "stat");
+          err(EXIT_FAILURE, "stat");
         }
     }
 
@@ -460,11 +493,11 @@ get_read_writes(char* filepath,
   fd = open(filepath, O_RDONLY);
   if (fd < 0)
     {
-      err(1, "open");
+      err(EXIT_FAILURE, "open");
     }
   read_bytes = read(fd,buf, 4096);
   if (read_bytes < 0)
-    err(1, "get_read_writes: read");
+    err(EXIT_FAILURE, "get_read_writes: read");
   buf[read_bytes] = '\0';
   // Field 1 -- # of reads issued
   // Field 2 -- # of reads merged 
@@ -519,11 +552,11 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
   block_info = calloc(sizeof(struct block_info_t), len);
   if (block_info == NULL)
-    err(1, "read_blocks1: len=%lli", len);
+    err(EXIT_FAILURE, "read_blocks1: len=%lli", len);
 
   buffer = malloc(sectors*512+pagesize);
   if (buffer == NULL)
-    err(1, "read_blocks2");
+    err(EXIT_FAILURE, "read_blocks2");
   buffer_free = buffer;
   buffer = ptr_align(buffer, pagesize);
 
@@ -549,7 +582,8 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
           
           if (bad_sector_warning)
             {
-              fprintf(stderr, "\nBAD SECTORS! Reads may not be accurate!");
+              fprintf(stderr, "%s\nBAD SECTORS! Reads may not be accurate!%s\n",
+                  CLEAR_LINE_END, CLEAR_LINE_END);
               bad_sector_warning = 0;
             }
 
@@ -574,7 +608,8 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
       if (bad_sector_warning)
         {
-          fprintf(stderr, "\nBAD SECTORS! Reads may not be accurate!");
+          fprintf(stderr, "%s\nBAD SECTORS! Reads may not be accurate!%s\n",
+              CLEAR_LINE_END, CLEAR_LINE_END);
           bad_sector_warning = 0;
         }
 
@@ -592,10 +627,10 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
   // check if current position is correct (assert)
   if ( lseek(fd, (off_t)0, SEEK_CUR) != offset * sectors * 512)
     {
-      fprintf(stderr, "\nhdck: read_blocks: wrong offset: got %lli expected %lli",
+      fprintf(stderr, "hdck: read_blocks: wrong offset: got %lli expected %lli\n",
           lseek(fd, (off_t)0, SEEK_CUR),
           offset * sectors * 512);
-      exit(1);
+      exit(EXIT_FAILURE);
     }
 
   // start reading main block
@@ -613,7 +648,7 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
       if (nread < 0)
         {
           if (errno != EIO)
-            err(1, "read_blocks3");
+            err(EXIT_FAILURE, "read_blocks3");
 
           write(2, "E", 1);
 
@@ -622,7 +657,8 @@ read_blocks(int fd, char* stat_path, off_t offset, off_t len)
 
           if (bad_sector_warning)
             {
-              fprintf(stderr, "\nBAD SECTORS! Reads may not be accurate!");
+              fprintf(stderr, "\nBAD SECTORS! Reads may not be accurate!%s\n",
+                  CLEAR_LINE_END);
               bad_sector_warning = 0;
             }
 
@@ -709,7 +745,7 @@ compact_block_list(struct block_list_t* block_list, size_t glob)
 
   ret = calloc(sizeof(struct block_list_t), block_list_len+1);
   if (ret == NULL)
-    err(1, "compact_block_list");
+    err(EXIT_FAILURE, "compact_block_list");
 
   // compact the list
   ret[0].off = block_list[0].off;
@@ -767,7 +803,7 @@ find_bad_blocks(struct block_info_t* block_info, size_t block_info_len,
 
   block_list = calloc(sizeof(struct block_list_t), block_info_len);
   if (block_list == NULL)
-    err(1, "find_uncertain_blocks");
+    err(EXIT_FAILURE, "find_uncertain_blocks");
 
   // find uncertain blocks
   for (size_t block_no=offset; block_no < block_info_len; block_no++)
@@ -909,7 +945,7 @@ write_to_file(char *file, struct block_info_t* block_info, size_t len)
 
   handle = fopen(file, "w+");
   if (handle == NULL)
-    err(1, "write_to_file");
+    err(EXIT_FAILURE, "write_to_file");
 
   fprintf(handle, "# sector_number, avg, trunc_avg, std_dev, rel_st_dev, "
       "trunc_st_dev, num_of_samples, samples\n");
@@ -952,12 +988,12 @@ write_list_to_file(char* file, struct block_list_t* block_list)
 
   handle = fopen(file, "w+");
   if (handle == NULL)
-    err(1,"write_list_to_file");
+    err(EXIT_FAILURE,"write_list_to_file");
 
   for(size_t i=0; !(block_list[i].off == 0 && block_list[i].len == 0); i++)
     if(fprintf(handle, "%lli %lli\n", block_list[i].off * sectors,
         (block_list[i].off + block_list[i].len) * sectors) == 0)
-      err(1, "write_list_to_file");
+      err(EXIT_FAILURE, "write_list_to_file");
 
   fclose(handle);
 }
@@ -972,11 +1008,11 @@ read_list_from_file(char* file)
 
   handle = fopen(file, "r");
   if (handle == NULL)
-    err(1, "read_list_from_file");
+    err(EXIT_FAILURE, "read_list_from_file");
 
   block_list = calloc(sizeof(struct block_list_t), alloc_elements);
   if (block_list == NULL)
-    err(1, "read_list_from_file");
+    err(EXIT_FAILURE, "read_list_from_file");
 
   off_t off, len;
   off_t re;
@@ -990,7 +1026,7 @@ read_list_from_file(char* file)
               sizeof(struct block_list_t)*alloc_elements);
 
           if (block_list == NULL)
-            err(1, "read_list_from_file");
+            err(EXIT_FAILURE, "read_list_from_file");
         }
       assert(alloc_elements >= read_blocks);
 
@@ -1000,14 +1036,14 @@ read_list_from_file(char* file)
 
       if ( len <= off )
         {
-          fprintf(stderr, "\nend LBA is bigger than start LBA on line %zi in "
-              "file %s",
+          fprintf(stderr, "end LBA is bigger than start LBA on line %zi in "
+              "file %s\n",
               read_blocks, file);
           exit(EXIT_FAILURE);
         }
       if (read_blocks > 0 && len < block_list[read_blocks-1].off)
         {
-          fprintf(stderr, "\nfile %s not sorted!", file);
+          fprintf(stderr, "file %s not sorted!\n", file);
           exit(EXIT_FAILURE);
         }
 
@@ -1049,7 +1085,7 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
   tmp_block_list = compact_block_list(block_list, max_len * 2);
   if (verbosity > 6)
     {
-      fprintf(stderr, "\nafter compacting:");
+      printf("after compacting:\n");
       print_block_list(tmp_block_list);
     }
 
@@ -1064,7 +1100,7 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
       offset = tmp_block_list[block_number].off;
       length = tmp_block_list[block_number].len;
       if (verbosity > 3)
-        fprintf(stderr, "\nprocessing block no %zi of length %zi", 
+        printf("processing block no %zi of length %zi\n", 
             offset, length);
 
       block_data = read_blocks(dev_fd, dev_stat_path, offset, length);
@@ -1075,16 +1111,17 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
           (block_data != NULL && !bi_is_valid(&block_data[0])))
         {
           if (verbosity > 2)
-            fprintf(stderr, 
-                "\nre-read of block %zi (length %zi) interrupted\n", 
+            printf("re-read of block %zi (length %zi) interrupted\n", 
                 offset, length);
           else if (verbosity > 0)
-            fprintf(stderr, "!");// interrupted
+            printf("!%s", CLEAR_LINE_END);// interrupted
+          fflush(stdout);
 
           block_number++;
         }
       else if (verbosity <= 3 && verbosity > 1)
-        fprintf(stderr, "."); // OK
+        printf(".%s", CLEAR_LINE_END); // OK
+      fflush(stdout);
 
       // print statistics
       if (verbosity >= 0 && (block_number % 10 == 0 || blocks_read % 32 == 0 
@@ -1099,14 +1136,15 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
           long long time_to_go;
           time_to_go = time_double(res) / percent;
           if (verbosity > 1)
-            fprintf(stderr, "\n");
+            printf("\n");
 
-          fprintf(stderr, "\033[2Kreread %.2f%% done "
+          printf("reread %.2f%% done "
               "in %02li:%02li:%02li, expected time:"
-              "%02lli:%02lli:%02lli\r",
+              "%02lli:%02lli:%02lli%s\r",
               percent * 100,
               res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
-              time_to_go/3600, time_to_go/60%60, time_to_go%60);
+              time_to_go/3600, time_to_go/60%60, time_to_go%60,
+              CLEAR_LINE_END);
         }
 
       // save whatever the read was successful
@@ -1140,7 +1178,7 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
               tmp_block_list = compact_block_list(block_list, max_len);
               if (verbosity > 7)
                 {
-                  fprintf(stderr, "\nafter compacting:");
+                  printf("after compacting:\n");
                   print_block_list(tmp_block_list);
                 }
 
@@ -1176,7 +1214,7 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
               tmp_block_list = compact_block_list(block_list, max_len);
               if (verbosity > 7)
                 {
-                  fprintf(stderr, "\nafter compacting:");
+                  printf("after compacting:\n");
                   print_block_list(tmp_block_list);
                 }
 
@@ -1184,7 +1222,7 @@ read_block_list(int dev_fd, struct block_list_t* block_list,
                 break;
 
               if (tmp_block_list == NULL)
-                err(1, "re_read");
+                err(EXIT_FAILURE, "re_read");
 
               total_blocks = blocks_read;
 
@@ -1247,14 +1285,14 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
           if (block_list == NULL)
             {
               if (verbosity >2)
-                fprintf(stderr, "\nno uncertain blocks found");
+                printf("no uncertain blocks found\n");
               break;
             }
 
           size_t block_number=0;
           // end of list is marked by NULL, NULL
           if (verbosity > 2)
-            fprintf(stderr, "\ncurrent uncertain blocks:");
+            printf("current uncertain blocks:\n");
 
           while (!(block_list[block_number].off == 0 && 
               block_list[block_number].len == 0))
@@ -1268,20 +1306,22 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
                     {
                       double stdev = bi_int_rel_stdev(&block_info[i]);
 
-                      fprintf(stderr, "\nrel std dev for block %zi: %3.9f"
-                          ", average: %f, valid: %s, samples: %zi", 
+                      printf("rel std dev for block %zi: %3.9f"
+                          ", average: %f, valid: %s, samples: %zi%s\n", 
                           i, 
                           stdev,
                           bi_average(&block_info[i]),
                           (bi_is_valid(&block_info[i]))?"yes":"no",
-                          bi_num_samples(&block_info[i]));
+                          bi_num_samples(&block_info[i]),
+                          CLEAR_LINE_END);
                     }
 
                 }
               block_number++;
             }
 
-          fprintf(stderr, "\nre-reading %zi uncertain blocks\n", block_number);
+          printf("re-reading %zi uncertain blocks%s\n", block_number, 
+              CLEAR_LINE_END);
           free(block_list);
         }
 
@@ -1299,8 +1339,8 @@ perform_re_reads(int dev_fd, char* dev_stat_path, struct block_info_t* block_inf
       read_block_list(dev_fd, block_list, block_info, dev_stat_path, 
           block_info_size);
 
-      if (verbosity <= 3 && verbosity > 1)
-        fprintf(stderr, "\n");
+      if (verbosity <= 3 && verbosity >= 0)
+        printf("\n");
 
       if (block_list)
         free(block_list);
@@ -1374,9 +1414,10 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
       // assertion
       if ( lseek(dev_fd, (off_t)0, SEEK_CUR) != ((off_t)blocks) * sectors * 512 )
         {
-          fprintf(stderr, "\nhdck: main: wrong offset got %lli expected %lli",
+          fprintf(stderr, "hdck: main: wrong offset, got %lli expected %lli\n",
               lseek(dev_fd, (off_t)0, SEEK_CUR),
               ((off_t)blocks) * sectors * 512);
+          exit(EXIT_FAILURE);
         }
 
       //clock_gettime(TIMER_TYPE, &time1);
@@ -1391,7 +1432,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
       if (nread < 0) // on error
         {
           if (errno != EIO)
-            err(1, NULL);
+            err(EXIT_FAILURE, NULL);
           else
             {
               diff_time(&res, time1, time2); 
@@ -1401,7 +1442,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
 
               if (bad_sector_warning)
                 {
-                  fprintf(stderr, "\nBAD SECTORS! Reads may not be accurate!");
+                  printf("BAD SECTORS! Reads may not be accurate!\n");
                   bad_sector_warning = 0;
                 }
 
@@ -1421,8 +1462,9 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
           (write_e != write_s && dev_stat_path != NULL))
         {
           if (verbosity > 0)
-            fprintf(stderr, "\nblock %zi (LBA: %lli-%lli) interrupted\n", blocks,
-               ((off_t)blocks) * sectors, ((off_t)blocks+1)*sectors);
+            printf("block %zi (LBA: %lli-%lli) interrupted%s\n", blocks,
+               ((off_t)blocks) * sectors, ((off_t)blocks+1)*sectors-1,
+               CLEAR_LINE_END);
           diff_time(&res, time1, time2);
           times_time(&res, 1000); // in ms not ns
           if (bi_is_valid(&block_info[blocks]) == 0)
@@ -1463,13 +1505,14 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
                   bi_add_time(&block_info[blocks], time_double(res));
 
                   if (verbosity > 10)
-                    fprintf(stderr, "\nblock: %zi, samples: %zi, average: "
-                        "%f, rel stdev: %f, trunc rel stdev: %f", 
+                    printf("block: %zi, samples: %zi, average: "
+                        "%f, rel stdev: %f, trunc rel stdev: %f%s\n", 
                         blocks,
                         bi_num_samples(&block_info[blocks]),
                         bi_average(&block_info[blocks]),
                         bi_rel_stdev(&block_info[blocks]),
-                        bi_int_rel_stdev(&block_info[blocks]));
+                        bi_int_rel_stdev(&block_info[blocks]),
+                        CLEAR_LINE_END);
                 }
               else
                 {
@@ -1477,13 +1520,14 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
                   bi_add_time(&block_info[blocks], time_double(res));
 
                   if (verbosity > 10)
-                    fprintf(stderr, "\nblock: %zi, samples: %zi, average: "
-                        "%f, rel stdev: %f, trunc rel stdev: %f", 
+                    printf("block: %zi, samples: %zi, average: "
+                        "%f, rel stdev: %f, trunc rel stdev: %f%s\n", 
                         blocks,
                         bi_num_samples(&block_info[blocks]),
                         bi_average(&block_info[blocks]),
                         bi_rel_stdev(&block_info[blocks]),
-                        bi_int_rel_stdev(&block_info[blocks]));
+                        bi_int_rel_stdev(&block_info[blocks]),
+                        CLEAR_LINE_END);
                 }
               
               diff_time(&res, time1, time2);
@@ -1495,39 +1539,40 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
 
       if (res.tv_nsec < 2000000 && res.tv_sec == 0) // very very fast read
         {
-          if (sector_times == PRINT_SYMBOLS) write(0,"_",1);
+          if (sector_times == PRINT_SYMBOLS) write(1,"_",1);
         }
       else if (res.tv_nsec < 5000000 && res.tv_sec == 0) // very fast read
         {
-          if (sector_times == PRINT_SYMBOLS) write(0,".",1);
+          if (sector_times == PRINT_SYMBOLS) write(1,".",1);
         }
       else if (res.tv_nsec < 10000000 && res.tv_sec == 0) // fast read
         {
-          if (sector_times == PRINT_SYMBOLS) write(0,",",1);
+          if (sector_times == PRINT_SYMBOLS) write(1,",",1);
         }
       else if (res.tv_nsec < 25000000 && res.tv_sec == 0) // normal read
         {
-          if (sector_times == PRINT_SYMBOLS) write(0,"-",1);
+          if (sector_times == PRINT_SYMBOLS) write(1,"-",1);
         }
       else if (res.tv_nsec < 50000000 && res.tv_sec == 0) // slow read
         {
-          if (sector_times == PRINT_SYMBOLS) write(0,"+",1);
+          if (sector_times == PRINT_SYMBOLS) write(1,"+",1);
         }
       else if (res.tv_nsec < 80000000 && res.tv_sec == 0) // very slow read
         {
-          if (sector_times == PRINT_SYMBOLS) write(0,"#",1);
+          if (sector_times == PRINT_SYMBOLS) write(1,"#",1);
         }
       else // very very slow read
         {
-          if (sector_times == PRINT_SYMBOLS) write(0,"!",1);
+          if (sector_times == PRINT_SYMBOLS) write(1,"!",1);
         }
 
       if (sector_times == PRINT_TIMES)
-        printf("\n%li r:%lli rs: %lli w:%lli",
+        printf("%li r:%lli rs: %lli w:%lli%s\n",
             res.tv_nsec/1000+res.tv_sec*1000000, 
             read_s, 
             read_sec_s, 
-            write_s); 
+            write_s,
+            CLEAR_LINE_END); 
 
       blocks++;
       abs_blocks++;
@@ -1555,9 +1600,29 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
               (max_sectors * sectors * 2.0f);
 
           long long time_to_go;
-          time_to_go = (res.tv_sec*1.0) / (percent/min_reads + loop*1.0/min_reads);
+          time_to_go = (res.tv_sec*1.0) / 
+                            (percent/min_reads + loop*1.0/min_reads);
 
-          fprintf(stderr,"\033[2Kread %lli sectors, %.3fMiB/s (%.3fMiB/s), "
+          printf("hdck status:%s\n", CLEAR_LINE_END);
+          printf("============%s\n", CLEAR_LINE_END);
+          printf("Loop:          %i of %i%s\n", loop+1, min_reads, 
+              CLEAR_LINE_END);
+          printf("Progress:      %.2f%%, %.2f%% total%s\n",
+              percent*100, (percent/min_reads + loop*1.0/min_reads) * 100,
+              CLEAR_LINE_END);
+          printf("Read:          %lli sectors of %lli%s\n", ((off_t)blocks)*sectors,
+              filesize, CLEAR_LINE_END);
+          printf("Speed:         %.3fMiB/s, average: %.3fMiB/s%s\n", cur_speed,
+              speed, CLEAR_LINE_END);
+          printf("Elapsed time:  %02li:%02li:%02li%s\n",
+              res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
+              CLEAR_LINE_END);
+          printf("Expected time: %02lli:%02lli:%02lli%s",
+              time_to_go/3600, time_to_go/60%60, time_to_go%60,
+              CLEAR_LINE_END);
+          printf("\r%s", cursor_up(7));
+          fflush(stdout);
+/*          fprintf(stderr,"\033[2Kread %lli sectors, %.3fMiB/s (%.3fMiB/s), "
               "%.2f%% (%.2f%%), "
               "in %02li:%02li:%02li, loop %zi of %zi, "
               "expected time: %02lli:%02lli:%02lli\r",
@@ -1567,7 +1632,7 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
              percent*100, (percent/min_reads + loop*1.0/min_reads) * 100,
              res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
              loop+1, min_reads,
-             time_to_go/3600, time_to_go/60%60, time_to_go%60);
+             time_to_go/3600, time_to_go/60%60, time_to_go%60);*/
         }
 
       if (nread == 0 || nread == -1 || blocks >= number_of_blocks
@@ -1595,8 +1660,8 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
                   ( high_dev/(blocks*1.0) > 0.25 
                     || sum_invalid/(blocks*1.0) > 0.10)
                  )
-                fprintf(stderr, "\nlow confidance for the results, "
-                    "re-reading whole disk\n");
+                printf("low confidance for the results, "
+                    "re-reading whole disk%s\n", CLEAR_LINE_END);
 
               blocks=0;
               // seek to first block
@@ -1617,8 +1682,8 @@ read_whole_disk(int dev_fd, struct block_info_t* block_info,
 
           if (loop > max_reads)
             {
-              fprintf(stderr, "\nWarning; read whole disk %zi times, still "
-                  "can't get high confidence\n", max_reads);
+              printf("Warning: read whole disk %zi times, still "
+                  "can't get high confidence%s\n", max_reads, CLEAR_LINE_END);
               break;
             }
         }
@@ -1699,9 +1764,10 @@ main(int argc, char **argv)
     case 0:
         if (verbosity > 5)
           {
-            printf("\noption %s", long_options[option_index].name);
+            printf("option %s%s\n", long_options[option_index].name,
+                CLEAR_LINE_END);
             if (optarg)
-                printf(" with arg %s", optarg);
+                printf(" with arg %s%s\n", optarg, CLEAR_LINE_END);
           }
         if (option_index == 9)
           {
@@ -1751,23 +1817,25 @@ main(int argc, char **argv)
         break;
 
     case 'v':
-        if (verbosity > 5 ) printf("\noption v");
+        if (verbosity > 5 ) printf("option v%s\n", CLEAR_LINE_END);
         verbosity++;
         break;
 
     case 'x':
-        if (verbosity > 5) printf("\noption x");
+        if (verbosity > 5) printf("option x%s\n", CLEAR_LINE_END);
         exclusive = 1;
         break;
 
     case 'f':
         filename = optarg;
-        if (verbosity > 5) printf("\noption f with value '%s'", optarg);
+        if (verbosity > 5) printf("option f with value '%s'%s\n", optarg,
+            CLEAR_LINE_END);
         break;
 
     case 'o':
         output = optarg;
-        if (verbosity > 5) printf("\noption o with value '%s'", optarg);
+        if (verbosity > 5) printf("option o with value '%s'%s\n", optarg,
+            CLEAR_LINE_END);
         break;
 
     case 'b':
@@ -1792,24 +1860,25 @@ main(int argc, char **argv)
         break;
 
     default:
-        printf("\n?? getopt returned character code 0%o ??\n", c);
+        printf("?? getopt returned character code 0%o ??%s\n", c, 
+            CLEAR_LINE_END);
         exit(EXIT_FAILURE);
     }
   }
 
   if (optind < argc)
     {
-      printf("\ntrailing options: ");
+      printf("trailing options: ");
       while (optind < argc)
           printf("%s ", argv[optind++]);
-      printf("\n");
+      printf("%s\n", CLEAR_LINE_END);
       usage();
       exit(EXIT_FAILURE);
     }
 
   if (filename == NULL)
     {
-      printf("\nMissing -f parameter!\n");
+      printf("Missing -f parameter!%s\n", CLEAR_LINE_END);
       usage();
       exit(EXIT_FAILURE);
     }
@@ -1835,7 +1904,8 @@ main(int argc, char **argv)
 
   if (min_reads > max_reads)
     {
-      fprintf(stderr, "\nWarning: min_reads bigger thatn max_reads, correcting");
+      fprintf(stderr, "Warning: min_reads bigger thatn max_reads, "
+          "correcting%s\n", CLEAR_LINE_END);
       max_reads = min_reads;
     }
 
@@ -1864,53 +1934,53 @@ main(int argc, char **argv)
  
   int flags = O_RDONLY | O_LARGEFILE; 
   if (verbosity > 5)
-    printf("\nsetting O_RDONLY flag on file");
+    printf("setting O_RDONLY flag on file\n");
   if (verbosity > 5)
-    printf("\nsetting O_LARGEFILE flag on file");
+    printf("setting O_LARGEFILE flag on file\n");
 
   // open the file with disabled caching
   if (!nodirect)
     {
       if (verbosity > 5)
-        printf("\nsetting O_DIRECT flag on file");
+        printf("setting O_DIRECT flag on file\n");
       flags = flags | O_DIRECT;
     }
   else
     {
       if (verbosity > 5)
-        printf("\nNOT setting O_DIRECT on file");
+        printf("NOT setting O_DIRECT on file\n");
     }
 
   // no sync on file
   if (!nosync)
     {
       if (verbosity > 5)
-        printf("\nsetting O_SYNC flag on file");
+        printf("setting O_SYNC flag on file\n");
       flags = flags | O_SYNC;
     }
   else
     {
       if (verbosity > 5)
-        printf("\nNOT setting O_SYNC on file");
+        printf("NOT setting O_SYNC on file\n");
     }
 
   // use exclusive mode
   if (exclusive)
     {
       if (verbosity > 5)
-        printf("\nsetting O_EXCL on file");
+        printf("setting O_EXCL on file\n");
       flags = flags | O_EXCL;
     }
   else
     {
       if (verbosity > 5)
-        printf("\nNOT setting O_EXCL on file");
+        printf("NOT setting O_EXCL on file\n");
     }
 
   dev_fd = open(filename, flags);
   if (dev_fd < 0)
     {
-      err(1, "open");
+      err(EXIT_FAILURE, "open");
     }
 
   filesize = get_file_size(dev_fd);
@@ -1919,14 +1989,15 @@ main(int argc, char **argv)
   filesize = floorl(filesize*1.L/512/sectors)*512*sectors;
   if (!filesize)
     {
-      fprintf(stderr, "\nDevice too small, needs to be at least %lli bytes in size\n",
-          ((off_t)512)*sectors);
+      fprintf(stderr, "Device too small, needs to be at least %lli bytes in "
+          "size\n", ((off_t)512)*sectors);
       exit(EXIT_FAILURE);
     }
 
   if (filesize / 512 / sectors * 2 > (off_t)SIZE_MAX)
     {
-      fprintf(stderr, "\nFile too big, devices this big are supported only on 64 bit OSs\n");
+      fprintf(stderr, "File too big, devices this big are supported only on "
+          "64 bit OSs\n");
       exit(EXIT_FAILURE);
     }
 
@@ -1942,9 +2013,9 @@ main(int argc, char **argv)
       sizeof(struct block_info_t));
   if (!block_info)
     {
-      printf("\nAllocation error, tried to allocate %lli bytes:", 
-          number_of_blocks* sizeof(struct block_info_t));
-      err(1, "calloc");
+      printf("Allocation error, tried to allocate %lli bytes:", 
+          number_of_blocks * sizeof(struct block_info_t));
+      err(EXIT_FAILURE, "calloc");
     }
 
   fsync(dev_fd);
@@ -1953,14 +2024,14 @@ main(int argc, char **argv)
     {
       // Attempt to free all cached pages related to the opened file
       if (posix_fadvise(dev_fd, 0, 0, POSIX_FADV_DONTNEED) < 0)
-        err(1, NULL);
+        err(EXIT_FAILURE, NULL);
       if (posix_fadvise(dev_fd, 0, 0, POSIX_FADV_NOREUSE) < 0)
-        err(1, NULL);
+        err(EXIT_FAILURE, NULL);
     }
 
   if (verbosity > 2)
     {
-      fprintf(stderr, "min-reads: %zi, max re-reads: %zi, max rel std dev %f, "
+      printf("min-reads: %zi, max re-reads: %zi, max rel std dev %f, "
           "disk cache size: %ziMiB\n",
          min_reads,
          max_reads,
@@ -1986,7 +2057,7 @@ main(int argc, char **argv)
 
       if(block_list == NULL)
         {
-          printf("\nFile \'%s\' is empty\n", read_sectors_from_file);
+          printf("File \'%s\' is empty\n", read_sectors_from_file);
           exit(EXIT_FAILURE);
         }
 
@@ -1996,6 +2067,7 @@ main(int argc, char **argv)
 
       free(block_list);
     }
+  printf("\r%s\n", cursor_down(7));
 
   perform_re_reads(dev_fd, dev_stat_path, block_info, number_of_blocks,
       max_reads, max_std_dev, min_reads, rotational_delay);
@@ -2009,8 +2081,8 @@ main(int argc, char **argv)
       rotational_delay, 0, 1);
 
   if (verbosity >= 0)
-    fprintf(stderr, "\n\nhdck results:\n"
-                    "=============");
+    printf("\nhdck results:%s\n"
+             "=============%s\n", CLEAR_LINE_END, CLEAR_LINE_END);
 
   if (block_list == NULL)
     {
@@ -2026,12 +2098,13 @@ main(int argc, char **argv)
           block_list = NULL;
         }
 
-      fprintf(stderr, "\nno uncertain blocks found!");
+      printf("no uncertain blocks found!%s\n", CLEAR_LINE_END);
     }
   else
     {
       if (verbosity > 0 || detailed_uncertain == 1)
-        fprintf(stderr, "\npossible latent bad sectors or silent realocations:");
+        printf("possible latent bad sectors or silent realocations:%s\n", 
+            CLEAR_LINE_END);
 
       size_t block_number=0;
       while (!(block_list[block_number].off == 0 && 
@@ -2046,14 +2119,15 @@ main(int argc, char **argv)
                 {
                   double stdev = bi_int_rel_stdev(&block_info[i]);
 
-                  fprintf(stdout, "\nblock %zi (LBA: %lli-%lli) rel std dev: %3.9f"
-                      ", average: %f, valid: %s, samples: %zi", 
+                  printf("block %zi (LBA: %lli-%lli) rel std dev: %3.9f"
+                      ", average: %f, valid: %s, samples: %zi%s\n", 
                       i,
                       ((off_t)i)*sectors,((off_t)i+1)*sectors-1,
                       stdev,
                       bi_average(&block_info[i]),
                       (bi_is_valid(&block_info[i]))?"yes":"no",
-                      bi_num_samples(&block_info[i]));
+                      bi_num_samples(&block_info[i]),
+                      CLEAR_LINE_END);
                 }
 
             }
@@ -2064,7 +2138,7 @@ main(int argc, char **argv)
 
               for(size_t i= start; i< end; i++)
                 {
-                  fprintf(stdout, "\n%lli\t%lli", ((off_t)i)*sectors,
+                  printf("%lli\t%lli\n", ((off_t)i)*sectors,
                       ((off_t)i+1)*sectors);
                 }
             }
@@ -2075,7 +2149,8 @@ main(int argc, char **argv)
 
       if (verbosity >= 0)
         {
-          fprintf(stderr, "\n%zi uncertain blocks found", block_number);
+          printf("%zi uncertain blocks found%s\n", block_number,
+              CLEAR_LINE_END);
         }
 
       if (write_uncertain_to_file != NULL)
@@ -2088,9 +2163,9 @@ main(int argc, char **argv)
   if (verbosity > 0 || detailed_uncertain == 1)
     {
       diff_time(&res, times, timee);
-      fprintf(stderr, "\n\nwall time: %lis.%lims.%liµs.%lins", res.tv_sec,
+      printf("\nwall time: %lis.%lims.%liµs.%lins%s\n", res.tv_sec,
           res.tv_nsec/1000000, res.tv_nsec/1000%1000,
-          res.tv_nsec%1000);
+          res.tv_nsec%1000, CLEAR_LINE_END);
 
       long double sum = 0.0;
       long long reads = 0;
@@ -2115,12 +2190,12 @@ main(int argc, char **argv)
       double msec = floor(sum - sec * 1000);
       double usec = floor((sum - sec * 1000 - msec)*1000);
 
-      fprintf(stderr, "\nsum time: %.0fs.%.0fms.%.0fµs",
+      printf("sum time: %.0fs.%.0fms.%.0fµs\n",
         sec,
         msec,
         usec);
 
-      fprintf(stderr, "\ntested %lli blocks (%lli errors, %lli samples)", 
+      printf("tested %lli blocks (%lli errors, %lli samples)\n", 
           number_of_blocks, errors, reads);
 
       sum = bi_average(&single_block);
@@ -2129,12 +2204,12 @@ main(int argc, char **argv)
       msec = floor(sum - sec * 1000);
       usec = floor((sum - sec * 1000 - msec)*1000);
 
-      fprintf(stderr, "\nmean block time: %.0fs.%.0fms.%.0fµs",
+      printf("mean block time: %.0fs.%.0fms.%.0fµs\n",
         sec,
         msec,
         usec);
 
-      fprintf(stderr, "\nstd dev: %.9f(ms)",
+      printf("std dev: %.9f(ms)\n",
           bi_stdev(&single_block));
 
       bi_clear(&single_block);
@@ -2197,55 +2272,62 @@ main(int argc, char **argv)
 
   if (verbosity > 0 || detailed_uncertain == 1)
     {
-      fprintf(stderr, "\nNumber of invalid measures because of detected "
-          "interrupted reads: %lli", sum_invalid);
-      fprintf(stderr, "\nIndividual block statistics:\n<%02.2fms: %lli\n"
+      printf("Number of invalid measures because of detected "
+          "interrupted reads: %lli\n", sum_invalid);
+      printf("Individual block statistics:\n<%02.2fms: %lli\n"
           "<%02.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n"
-          "<%2.2fms: %lli\n>%2.2fms: %lli\nERR: %lli",
+          "<%2.2fms: %lli\n>%2.2fms: %lli\nERR: %lli\n",
         rotational_delay / 4, vvfast, rotational_delay / 2, vfast,
         rotational_delay, fast, rotational_delay * 2, normal,
         rotational_delay * 4, slow, rotational_delay * 6, vslow, 
         rotational_delay * 6, vvslow, errors);
 
-      fprintf(stderr, "\n\nDiagnosis: ");
+      printf("\nDisk status: ");
       if (errors != 0)
         {
-          fprintf(stderr, "CAUTION! Bad sectors detected, copy data off this "
-              "disk AS SOON AS POSSIBLE!");
+          printf("FAILED\n"
+              "CAUTION! Bad sectors detected, copy data off this "
+              "disk AS SOON AS POSSIBLE!\n");
         }
       else if (vvslow != 0)
         {
-          fprintf(stderr, "CAUTION! Sectors that required more than 6 read "
-              "attempts detected, drive may be ALREADY FAILING!");
+          printf("CRITICAL\n"
+              "CAUTION! Sectors that required more than 6 read "
+              "attempts detected, drive may be ALREADY FAILING!\n");
         }
       else if (vslow != 0)
         {
-          fprintf(stderr, "sectors that required more than 4 read attempts "
-              "detected, drive is in very bad condition!");
+          printf("very bad\n"
+              "sectors that required more than 4 read attempts "
+              "detected!\n");
         }
       else if (slow != 0)
         {
-          fprintf(stderr, "sectors that required more than 2 read attempts "
-              "detected, drive is in bad condition");
+          printf("bad\n"
+              "sectors that required more than 2 read attempts "
+              "detected\n");
         }
       else if ((normal * 1.0) / (number_of_blocks * 1.0) > 0.001)
         {
-          fprintf(stderr, "high number of blocks that required more than 1 "
-              "read attempt detected, drive is in moderate condition");
+          printf("moderate\n"
+              "high number of blocks that required more than 1 "
+              "read attempt detected, drive is in moderate condition\n");
         }
       else if (normal == 0)
         {
           if ((fast * 1.0) / (number_of_blocks * 1.0) < 0.1)
             {
-              fprintf(stderr, "Drive is in excellent condition");
+              printf("excellent\n");
             }
           else
-            fprintf(stderr, "no blocks that required constant re-reads "
-                "detected, drive is in very good condition");
+            printf("very good\n"
+                "no blocks that required constant re-reads "
+                "detected\n");
         }
       else
-        fprintf(stderr, "few blocks that required more than 1 read attempt "
-            "detected, drive is in good condition");
+        printf("good\n"
+            "few blocks that required more than 1 read attempt "
+            "detected\n");
     }
 
   if (verbosity > 2)
@@ -2309,16 +2391,16 @@ main(int argc, char **argv)
           raw_sum += partial_sum;
         }
 
-      fprintf(stderr, "\nraw read statistics:\n"); 
-      fprintf(stderr, "ERR: %lli\n2ms:  %lli\n5ms:  %lli\n10ms: %lli\n25ms: %lli\n"
-          "50ms: %lli\n80ms: %lli\n80+ms: %lli",
+      printf("\nraw read statistics:\n"); 
+      printf("ERR: %lli\n2ms:  %lli\n5ms:  %lli\n10ms: %lli\n25ms: %lli\n"
+          "50ms: %lli\n80ms: %lli\n80+ms: %lli\n",
           errors, vvfast, vfast, fast, normal, slow, vslow, vvslow);
 
       double sec = floor(raw_sum / 1000);
       double msec = floor(raw_sum - sec * 1000);
       double usec = floor((raw_sum - sec * 1000 - msec)*1000);
 
-      fprintf(stderr, "\nsum time: %.0fs.%.0fms.%.0fµs",
+      printf("sum time: %.0fs.%.0fms.%.0fµs\n",
         sec,
         msec,
         usec);
@@ -2329,7 +2411,7 @@ main(int argc, char **argv)
       msec = floor(raw_sum - sec * 1000);
       usec = floor((raw_sum - sec * 1000 - msec)*1000);
 
-      fprintf(stderr, "\nmean block time: %.0fs.%.0fms.%.0fµs",
+      printf("mean block time: %.0fs.%.0fms.%.0fµs\n",
         sec,
         msec,
         usec);
@@ -2346,5 +2428,5 @@ main(int argc, char **argv)
     bi_clear(&block_info[i]);
   free(block_info);
   printf("\n");
-  return 0;
+  return EXIT_SUCCESS;
 }
