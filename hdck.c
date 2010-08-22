@@ -59,7 +59,7 @@ const struct version_t {
     const int major;
     const int minor;
     const int revision;
-} version = {0, 2, 5};
+} version = {0, 2, 6};
 
 int pagesize = 4096;
 size_t sectors = 256; ///< number of sectors read per sample
