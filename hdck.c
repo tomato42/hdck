@@ -2364,14 +2364,14 @@ main(int argc, char **argv)
         }
     }
 
-  if (verbosity > 0)
+  if (verbosity >= 0)
     printf("Number of invalid measures because of detected "
       "interrupted reads: %lli\n", sum_invalid);
   if (flog != NULL)
     fprintf(flog, "Number of invalid measures because of detected "
         "interrupted reads: %lli\n", sum_invalid);
 
-  if (verbosity > 0)
+  if (verbosity >= 0)
     printf("Individual block statistics:\n<%02.2fms: %lli\n"
         "<%02.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n"
         "<%2.2fms: %lli\n>%2.2fms: %lli\nERR: %lli\n",
