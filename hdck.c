@@ -54,6 +54,13 @@
 #define CLEAR_LINE "\033[2K"
 #define CLEAR_LINE_END "\033[K"
 
+/// struct for holding current version number in computer readable form
+const struct version_t {
+    const int major;
+    const int minor;
+    const int revision;
+} version = {0, 2, 4};
+
 int pagesize = 4096;
 size_t sectors = 256; ///< number of sectors read per sample
 int verbosity = 0;
@@ -72,6 +79,8 @@ size_t min_reads = 0;
 size_t max_reads = 0; 
 /// maximal standard deviation accepted for a block
 double max_std_dev = 0;
+/// handle for log file
+FILE* flog = NULL;
 
 size_t disk_cache_size = 32;
 
@@ -132,6 +141,7 @@ usage()
   printf("-o, --outfile FILE  output file for the detailed statistics \n");
   printf("-w, --bad-sectors FILE output file for the uncertain sectors\n");
   printf("-r, --read-sectors FILE list of ranges to scan instead of whole disk\n");
+  printf("-l, --log FILE      log file to use\n");
   printf("--nodirect          don't use O_DIRECT\n");
   printf("--noflush           don't flush system buffers before reading\n");
   printf("--nosync            don't use O_SYNC\n");
@@ -181,9 +191,9 @@ usage()
 }
 
 void
-version(void)
+print_version(void)
 {
-  printf("hdck 0.2.4\n");
+  printf("hdck %i.%i.%i\n", version.major, version.minor, version.revision);
   printf("License GPLv3+: GNU GPL version 3 or later "
       "<http://gnu.org/licenses/gpl.html>.\n");
   printf("This is free software: you are free to change and redistribute it.\n");
@@ -321,6 +331,8 @@ get_file_size(int dev_fd)
         {
           printf("file size: %lli bytes\n", file_stat.st_size);
         }
+      if (flog != NULL)
+        fprintf(flog, "device size: %lli bytes\n", file_stat.st_size);
     }
   else if (S_ISBLK(file_stat.st_mode))
     {
@@ -328,6 +340,8 @@ get_file_size(int dev_fd)
         err(EXIT_FAILURE, "ioctl: BLKGETSIZE64");
       if (verbosity > 2)
         printf("file size: %lli bytes\n", filesize);
+      if (flog != NULL)
+        fprintf(flog, "device size: %lli bytes\n", filesize);
     }
   else
     {
@@ -1701,6 +1715,7 @@ main(int argc, char **argv)
   char* output = NULL; ///< output file name
   char* write_uncertain_to_file = NULL; ///< output file for uncertain sectors
   char* read_sectors_from_file = NULL; ///< file with sectors to scan to
+  char* log_path = NULL; ///< path to file to write log to
   int sector_times = 0;
   int nosync = 0;
   int noflush = 0;
@@ -1752,10 +1767,11 @@ main(int argc, char **argv)
         {"bad-sectors", 0, 0, 'w'}, // 20
         {"read-sectors", 0, 0, 'r'}, // 21
         {"version", 0, 0, 0}, // 22
+        {"log", 0, 0, 'l'}, // 23
         {0, 0, 0, 0}
     };
 
-    c = getopt_long(argc, argv, "f:xhbvo:?w:r:",
+    c = getopt_long(argc, argv, "f:xhbvo:?w:r:l:",
              long_options, &option_index);
     if (c == -1)
       break;
@@ -1811,7 +1827,7 @@ main(int argc, char **argv)
           }
         if (option_index == 22)
           {
-            version();
+            print_version();
             exit(EXIT_SUCCESS);
           }
         break;
@@ -1851,6 +1867,10 @@ main(int argc, char **argv)
 
     case 'r':
         read_sectors_from_file = optarg;
+        break;
+
+    case 'l':
+        log_path = optarg;
         break;
 
     case 'h':
@@ -1902,10 +1922,40 @@ main(int argc, char **argv)
         max_std_dev = 0.5;
     }
 
+  if (log_path != NULL)
+    {
+      flog = fopen(log_path, "w+");
+      if (flog == NULL)
+        err(EXIT_FAILURE, "log: open");
+
+      fprintf(flog, "hdck v.%i.%i.%i log start\n", 
+          version.major, version.minor, version.revision);
+      fprintf(flog, "=========================\n");
+      fprintf(flog, "Test parameters:\n");
+      fprintf(flog, "min reads: %zi\n", min_reads);
+      fprintf(flog, "max reads: %zi\n", max_reads);
+      fprintf(flog, "max standard deviation: %f\n", max_std_dev);
+      if(exclusive)
+        {
+          fprintf(flog, "Exclusive access specified\n");
+        }
+      if(read_sectors_from_file != NULL)
+        {
+          fprintf(flog, "Testing only ranges specified in file %s\n", 
+              read_sectors_from_file);
+        }
+      fprintf(flog, "Testing device at %s\n", filename);
+      fprintf(flog, "Assuming %.0frpm with %iMiB cache\n", 
+          1000/rotational_delay*60,
+          disk_cache_size);
+    }
+
   if (min_reads > max_reads)
     {
-      fprintf(stderr, "Warning: min_reads bigger thatn max_reads, "
+      fprintf(stderr, "Warning: min_reads bigger than max_reads, "
           "correcting%s\n", CLEAR_LINE_END);
+      if (flog != NULL)
+        fprintf(flog, "min reads bigger than max reads, correcting\n");
       max_reads = min_reads;
     }
 
@@ -2013,7 +2063,7 @@ main(int argc, char **argv)
       sizeof(struct block_info_t));
   if (!block_info)
     {
-      printf("Allocation error, tried to allocate %lli bytes:", 
+      fprintf(stderr, "Allocation error, tried to allocate %lli bytes:", 
           number_of_blocks * sizeof(struct block_info_t));
       err(EXIT_FAILURE, "calloc");
     }
@@ -2044,6 +2094,10 @@ main(int argc, char **argv)
   /*
    * MAIN LOOP
    */
+  time_t current_time;
+  current_time = time(NULL);
+  if (flog != NULL)
+    fprintf(flog, "\nbegin testing: %s\n", asctime(localtime(&current_time)));
   if(read_sectors_from_file == NULL)
     {
       read_whole_disk(dev_fd, block_info, dev_stat_path, min_reads, sector_times,
@@ -2067,10 +2121,18 @@ main(int argc, char **argv)
 
       free(block_list);
     }
-  printf("\r%s\n", cursor_down(7));
+  if (verbosity >= 0)
+    printf("\r%s\n", cursor_down(7));
+  current_time = time(NULL);
+  if(flog != NULL)
+    fprintf(flog, "end of main loop: %s\n", asctime(localtime(&current_time)));
 
   perform_re_reads(dev_fd, dev_stat_path, block_info, number_of_blocks,
       max_reads, max_std_dev, min_reads, rotational_delay);
+
+  current_time = time(NULL);
+  if(flog != NULL)
+    fprintf(flog, "end of rereads: %s\n", asctime(localtime(&current_time)));
 
 
   // print uncertain and bad blocks
@@ -2083,6 +2145,8 @@ main(int argc, char **argv)
   if (verbosity >= 0)
     printf("\nhdck results:%s\n"
              "=============%s\n", CLEAR_LINE_END, CLEAR_LINE_END);
+  if(flog != NULL)
+    fprintf(flog, "results:\n");
 
   if (block_list == NULL)
     {
@@ -2098,49 +2162,53 @@ main(int argc, char **argv)
           block_list = NULL;
         }
 
-      printf("no uncertain blocks found!%s\n", CLEAR_LINE_END);
+      if (verbosity >= 0)
+        printf("no problematic blocks found!%s\n", CLEAR_LINE_END);
+      if(flog != NULL)
+        fprintf(flog, "no problematic blocks found!\n");
     }
   else
     {
-      if (verbosity > 0 || detailed_uncertain == 1)
+      if (verbosity >= 0)
         printf("possible latent bad sectors or silent realocations:%s\n", 
             CLEAR_LINE_END);
+      if (flog != NULL)
+        fprintf(flog, "possible latent bad sectors or silent realocations:\n");
 
       size_t block_number=0;
       while (!(block_list[block_number].off == 0 && 
           block_list[block_number].len == 0))
         {
-          if (verbosity > 2 || detailed_uncertain == 1)
+          size_t start = block_list[block_number].off,
+                end = start + block_list[block_number].len;
+
+          for(size_t i= start; i< end; i++)
             {
-              size_t start = block_list[block_number].off,
-                    end = start + block_list[block_number].len;
+              double stdev = bi_int_rel_stdev(&block_info[i]);
 
-              for(size_t i= start; i< end; i++)
-                {
-                  double stdev = bi_int_rel_stdev(&block_info[i]);
+              if (verbosity >= 0)
+                printf("block %zi (LBA: %lli-%lli) rel std dev: %3.9f"
+                  ", average: %f, valid: %s, samples: %zi%s\n", 
+                  i,
+                  ((off_t)i)*sectors,((off_t)i+1)*sectors-1,
+                  stdev,
+                  bi_average(&block_info[i]),
+                  (bi_is_valid(&block_info[i]))?"yes":"no",
+                  bi_num_samples(&block_info[i]),
+                  CLEAR_LINE_END);
+              /*else
+                printf("%lli\t%lli\n", ((off_t)i)*sectors,
+                  ((off_t)i+1)*sectors);*/
 
-                  printf("block %zi (LBA: %lli-%lli) rel std dev: %3.9f"
-                      ", average: %f, valid: %s, samples: %zi%s\n", 
-                      i,
-                      ((off_t)i)*sectors,((off_t)i+1)*sectors-1,
-                      stdev,
-                      bi_average(&block_info[i]),
-                      (bi_is_valid(&block_info[i]))?"yes":"no",
-                      bi_num_samples(&block_info[i]),
-                      CLEAR_LINE_END);
-                }
-
-            }
-          else
-            {
-              size_t start = block_list[block_number].off,
-                    end = start + block_list[block_number].len;
-
-              for(size_t i= start; i< end; i++)
-                {
-                  printf("%lli\t%lli\n", ((off_t)i)*sectors,
-                      ((off_t)i+1)*sectors);
-                }
+              if (flog != NULL)
+                fprintf(flog, "block %zi (LBA: %lli-%lli) rel std dev: %3.9f"
+                  ", average: %f, valid: %s, samples: %zi\n", 
+                  i,
+                  ((off_t)i)*sectors,((off_t)i+1)*sectors-1,
+                  stdev,
+                  bi_average(&block_info[i]),
+                  (bi_is_valid(&block_info[i]))?"yes":"no",
+                  bi_num_samples(&block_info[i]));
             }
           block_number++;
         }
@@ -2148,10 +2216,10 @@ main(int argc, char **argv)
       fflush(stdout);
 
       if (verbosity >= 0)
-        {
-          printf("%zi uncertain blocks found%s\n", block_number,
-              CLEAR_LINE_END);
-        }
+        printf("%zi uncertain blocks found%s\n", block_number,
+            CLEAR_LINE_END);
+      if (flog != NULL)
+        fprintf(flog, "%zi uncertain blocks found\n", block_number);
 
       if (write_uncertain_to_file != NULL)
         write_list_to_file(write_uncertain_to_file, block_list);
@@ -2160,60 +2228,86 @@ main(int argc, char **argv)
     }
 
   clock_gettime(TIMER_TYPE, &timee);
-  if (verbosity > 0 || detailed_uncertain == 1)
+
+  diff_time(&res, times, timee);
+  if (verbosity >= 0)
+    printf("\nwall time: %lis.%lims.%liµs.%lins%s\n", res.tv_sec,
+        res.tv_nsec/1000000, res.tv_nsec/1000%1000,
+        res.tv_nsec%1000, CLEAR_LINE_END);
+
+  if (flog != NULL)
+    fprintf(flog, "\nwall time: %lis.%lims.%liµs.%lins\n", res.tv_sec,
+        res.tv_nsec/1000000, res.tv_nsec/1000%1000,
+        res.tv_nsec%1000);
+
+  long double sum = 0.0;
+  long long reads = 0;
+  struct block_info_t single_block;
+
+  bi_init(&single_block);
+
+  for (size_t i=0; i < number_of_blocks; i++)
     {
-      diff_time(&res, times, timee);
-      printf("\nwall time: %lis.%lims.%liµs.%lins%s\n", res.tv_sec,
-          res.tv_nsec/1000000, res.tv_nsec/1000%1000,
-          res.tv_nsec%1000, CLEAR_LINE_END);
+      if (!bi_is_initialised(&block_info[i]))
+        continue;
+      sum += bi_sum(&block_info[i]);
+      reads += bi_num_samples(&block_info[i]);
 
-      long double sum = 0.0;
-      long long reads = 0;
-      struct block_info_t single_block;
-
-      bi_init(&single_block);
-
-      for (size_t i=0; i < number_of_blocks; i++)
-        {
-          if (!bi_is_initialised(&block_info[i]))
-            continue;
-          sum += bi_sum(&block_info[i]);
-          reads += bi_num_samples(&block_info[i]);
-
-          if (bi_num_samples(&block_info[i]) < 5)
-            bi_add_time(&single_block, bi_average(&block_info[i]));
-          else
-            bi_add_time(&single_block, bi_trunc_average(&block_info[i], 0.25));
-        }
-
-      double sec = floor(sum / 1000);
-      double msec = floor(sum - sec * 1000);
-      double usec = floor((sum - sec * 1000 - msec)*1000);
-
-      printf("sum time: %.0fs.%.0fms.%.0fµs\n",
-        sec,
-        msec,
-        usec);
-
-      printf("tested %lli blocks (%lli errors, %lli samples)\n", 
-          number_of_blocks, errors, reads);
-
-      sum = bi_average(&single_block);
-
-      sec = floor(sum / 1000);
-      msec = floor(sum - sec * 1000);
-      usec = floor((sum - sec * 1000 - msec)*1000);
-
-      printf("mean block time: %.0fs.%.0fms.%.0fµs\n",
-        sec,
-        msec,
-        usec);
-
-      printf("std dev: %.9f(ms)\n",
-          bi_stdev(&single_block));
-
-      bi_clear(&single_block);
+      if (bi_num_samples(&block_info[i]) < 5)
+        bi_add_time(&single_block, bi_average(&block_info[i]));
+      else
+        bi_add_time(&single_block, bi_trunc_average(&block_info[i], 0.25));
     }
+
+  double sec = floor(sum / 1000);
+  double msec = floor(sum - sec * 1000);
+  double usec = floor((sum - sec * 1000 - msec)*1000);
+
+  if (verbosity >= 0)
+    printf("sum time: %.0fs.%.0fms.%.0fµs\n",
+      sec,
+      msec,
+      usec);
+  if (flog != NULL)
+    fprintf(flog, "sum time: %.0fs.%.0fms.%.0fµs\n",
+      sec,
+      msec,
+      usec);
+
+  if (verbosity >= 0)
+    printf("tested %lli blocks (%lli errors, %lli samples)\n", 
+        number_of_blocks, errors, reads);
+  if (flog != NULL)
+    fprintf(flog, "tested %lli blocks (%lli errors, %lli samples)\n", 
+        number_of_blocks, errors, reads);
+
+
+  sum = bi_average(&single_block);
+
+  sec = floor(sum / 1000);
+  msec = floor(sum - sec * 1000);
+  usec = floor((sum - sec * 1000 - msec)*1000);
+
+  if (verbosity >= 0)
+    printf("mean block time: %.0fs.%.0fms.%.0fµs\n",
+      sec,
+      msec,
+      usec);
+  if (flog != NULL)
+    fprintf(flog, "mean block time: %.0fs.%.0fms.%.0fµs\n",
+      sec,
+      msec,
+      usec);
+
+  if (verbosity >= 0)
+    printf("std dev: %.9f(ms)\n",
+        bi_stdev(&single_block));
+  if (flog != NULL)
+    fprintf(flog, "std dev: %.9f(ms)\n",
+        bi_stdev(&single_block));
+
+  bi_clear(&single_block);
+
   long long sum_invalid=0;
   vvfast=0; /* less than one fourth th rotational delay */
   vfast=0;  /* less than half the rotational delay */
@@ -2270,64 +2364,114 @@ main(int argc, char **argv)
         }
     }
 
-  if (verbosity > 0 || detailed_uncertain == 1)
-    {
-      printf("Number of invalid measures because of detected "
-          "interrupted reads: %lli\n", sum_invalid);
-      printf("Individual block statistics:\n<%02.2fms: %lli\n"
-          "<%02.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n"
-          "<%2.2fms: %lli\n>%2.2fms: %lli\nERR: %lli\n",
-        rotational_delay / 4, vvfast, rotational_delay / 2, vfast,
-        rotational_delay, fast, rotational_delay * 2, normal,
-        rotational_delay * 4, slow, rotational_delay * 6, vslow, 
-        rotational_delay * 6, vvslow, errors);
+  if (verbosity > 0)
+    printf("Number of invalid measures because of detected "
+      "interrupted reads: %lli\n", sum_invalid);
+  if (flog != NULL)
+    fprintf(flog, "Number of invalid measures because of detected "
+        "interrupted reads: %lli\n", sum_invalid);
 
-      printf("\nDisk status: ");
-      if (errors != 0)
+  if (verbosity > 0)
+    printf("Individual block statistics:\n<%02.2fms: %lli\n"
+        "<%02.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n"
+        "<%2.2fms: %lli\n>%2.2fms: %lli\nERR: %lli\n",
+      rotational_delay / 4, vvfast, rotational_delay / 2, vfast,
+      rotational_delay, fast, rotational_delay * 2, normal,
+      rotational_delay * 4, slow, rotational_delay * 6, vslow, 
+      rotational_delay * 6, vvslow, errors);
+  if (flog != NULL)
+    fprintf(flog, "Individual block statistics:\n<%02.2fms: %lli\n"
+        "<%02.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n<%2.2fms: %lli\n"
+        "<%2.2fms: %lli\n>%2.2fms: %lli\nERR: %lli\n",
+      rotational_delay / 4, vvfast, rotational_delay / 2, vfast,
+      rotational_delay, fast, rotational_delay * 2, normal,
+      rotational_delay * 4, slow, rotational_delay * 6, vslow, 
+      rotational_delay * 6, vvslow, errors);
+
+  if (verbosity >= 0)
+    printf("\n");
+  printf("Disk status: ");
+  if (flog != NULL)
+    fprintf(flog, "\nDisk status: ");
+  if (errors != 0)
+    {
+      printf("FAILED\n"
+          "CAUTION! Bad sectors detected, copy data off this "
+          "disk AS SOON AS POSSIBLE!\n");
+      if (flog != NULL)
+        fprintf(flog, "FAILED\n"
+            "CAUTION! Bad sectors detected, copy data off this "
+            "disk AS SOON AS POSSIBLE!\n");
+    }
+  else if (vvslow != 0)
+    {
+      printf("CRITICAL\n"
+          "CAUTION! Sectors that required more than 6 read "
+          "attempts detected, drive may be ALREADY FAILING!\n");
+      if (flog != NULL)
+        fprintf(flog, "CRITICAL\n"
+            "CAUTION! Sectors that required more than 6 read "
+            "attempts detected, drive may be ALREADY FAILING!\n");
+    }
+  else if (vslow != 0)
+    {
+      printf("very bad\n"
+          "sectors that required more than 4 read attempts "
+          "detected!\n");
+      if (flog != NULL)
+        fprintf(flog, "very bad\n"
+            "sectors that required more than 4 read attempts "
+            "detected!\n");
+    }
+  else if (slow != 0)
+    {
+      printf("bad\n"
+          "sectors that required more than 2 read attempts "
+          "detected\n");
+      if (flog != NULL)
+        fprintf(flog, "bad\n"
+            "sectors that required more than 2 read attempts "
+            "detected\n");
+    }
+  else if ((normal * 1.0) / (number_of_blocks * 1.0) > 0.001)
+    {
+      printf("moderate\n"
+          "high number of blocks that required more than 1 "
+          "read attempt detected, drive is in moderate condition\n");
+      if (flog != NULL) 
+        fprintf(flog, "moderate\n"
+            "high number of blocks that required more than 1 "
+            "read attempt detected, drive is in moderate condition\n");
+    }
+  else if (normal == 0)
+    {
+      if ((fast * 1.0) / (number_of_blocks * 1.0) < 0.1)
         {
-          printf("FAILED\n"
-              "CAUTION! Bad sectors detected, copy data off this "
-              "disk AS SOON AS POSSIBLE!\n");
-        }
-      else if (vvslow != 0)
-        {
-          printf("CRITICAL\n"
-              "CAUTION! Sectors that required more than 6 read "
-              "attempts detected, drive may be ALREADY FAILING!\n");
-        }
-      else if (vslow != 0)
-        {
-          printf("very bad\n"
-              "sectors that required more than 4 read attempts "
-              "detected!\n");
-        }
-      else if (slow != 0)
-        {
-          printf("bad\n"
-              "sectors that required more than 2 read attempts "
-              "detected\n");
-        }
-      else if ((normal * 1.0) / (number_of_blocks * 1.0) > 0.001)
-        {
-          printf("moderate\n"
-              "high number of blocks that required more than 1 "
-              "read attempt detected, drive is in moderate condition\n");
-        }
-      else if (normal == 0)
-        {
-          if ((fast * 1.0) / (number_of_blocks * 1.0) < 0.1)
-            {
-              printf("excellent\n");
-            }
-          else
-            printf("very good\n"
-                "no blocks that required constant re-reads "
-                "detected\n");
+          printf("excellent\n");
+          if (flog != NULL)
+            fprintf(flog, "excellent\n");
         }
       else
-        printf("good\n"
-            "few blocks that required more than 1 read attempt "
+        {
+          printf("very good\n"
+            "no blocks that required constant re-reads "
             "detected\n");
+      
+          if (flog != NULL)
+            fprintf(flog, "very good\n"
+              "no blocks that required constant re-reads "
+              "detected\n");
+        }
+    }
+  else
+    {
+      printf("good\n"
+          "few blocks that required more than 1 read attempt "
+          "detected\n");
+      if (flog != NULL)
+        fprintf(flog, "good\n"
+          "few blocks that required more than 1 read attempt "
+          "detected\n");
     }
 
   if (verbosity > 2)
@@ -2427,6 +2571,11 @@ main(int argc, char **argv)
   for(size_t i=0; i< number_of_blocks; i++)
     bi_clear(&block_info[i]);
   free(block_info);
-  printf("\n");
+  if (verbosity >= 0)
+    printf("\n");
+  if (flog != NULL)
+    fprintf(flog, "\nhdck log end");
+  if (flog != NULL)
+    fclose(flog);
   return EXIT_SUCCESS;
 }
