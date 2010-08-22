@@ -1,3 +1,12 @@
+v 0.2.5 - 2010-08-22
+--------------------
+
+  * compare block times to fractions and multiples of rotational delay, 
+    not fixed values
+  * print simple diagnosis (disk condition)
+  * printing status message on multiple lines and on stdout, not stderr
+  * log output
+
 v 0.2.4 - 2010-08-11
 --------------------
 
