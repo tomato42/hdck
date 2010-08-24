@@ -1022,11 +1022,21 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
           continue;
         }
 
-      // ignore single re-reads if in quick mode
+      // ignore single re-reads or blocks that could be assigned as such 
+      // if in quick mode
       if (certain_bad == 0 && st->quick)
         {
           if (bi_max(&block_info[block_no]) < st->normal_lvl)
             continue;
+          if (bi_max(&block_info[block_no]) < st->slow_lvl &&
+              bi_average(&block_info[block_no]) < st->normal_lvl &&
+              bi_num_samples(&block_info[block_no]) > 2)
+            continue;
+        }
+
+      // don't list blocks with one reread in quick mode
+      if (certain_bad == 1 && st->quick)
+        {
           if (bi_max(&block_info[block_no]) < st->slow_lvl &&
               bi_average(&block_info[block_no]) < st->normal_lvl)
             continue;
@@ -1148,6 +1158,67 @@ find_uncertain_blocks(struct status_t *st, struct block_info_t* block_info,
 {
   return find_bad_blocks(st, block_info, block_info_len, min_std_dev,
       min_reads, glob, offset, delay, soft_delay, 0);
+}
+
+void
+sort_worst_block_list(struct status_t *st, 
+    struct block_info_t *block_info, size_t block_info_len, 
+    struct block_list_t *block_list, size_t block_list_len)
+{
+  for (size_t i=0; i<block_list_len; i++)
+    {
+      for (size_t j=0; j<block_list_len-1; j++)
+        {
+          if (bi_int_average(&block_info[block_list[j].off]) >
+                bi_int_average(&block_info[block_list[j+1].off]))
+            {
+              off_t tmp;
+              tmp = block_list[j].off;
+              block_list[j].off = block_list[j+1].off;
+              block_list[j+1].off = tmp;
+            }
+        }
+    }
+}
+
+struct block_list_t*
+find_worst_blocks(struct status_t *st, struct block_info_t *block_info, 
+    size_t block_info_len, size_t number)
+{
+  struct block_list_t *block_list = calloc(sizeof(struct block_list_t), 
+                                                  block_info_len + 1);
+  if (block_list == NULL)
+    err(EXIT_FAILURE, "find_worst_blocks");
+
+  // assert
+  if (number >= block_info_len)
+    {
+      fprintf(stderr, "find_worst_blocks: number of blocks to find greater than"
+          " total blocks\n");
+      exit(EXIT_FAILURE);
+    }
+
+  for (size_t i=0; i < number; i++)
+    {
+      block_list[i].off = i;
+      block_list[i].len = 1;
+    }
+
+  sort_worst_block_list(st, block_info, block_info_len, 
+      block_list, number);
+
+  for (size_t block_no = number; block_no < block_info_len; block_no++)
+    {
+      if (bi_int_average(&block_info[block_list[0].off]) <
+          bi_int_average(&block_info[block_no]))
+          {
+            block_list[0].off = block_no;
+            sort_worst_block_list(st, block_info, block_info_len, 
+                block_list, number);
+          }
+    }
+
+  return block_list;
 }
 
 void
@@ -1823,11 +1894,11 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
             (res.tv_sec * 1.0f + res.tv_nsec / 1000000000.0);
 
           float percent;
-          if (max_sectors == 0)
+          if (st->max_sectors == 0)
             percent = (blocks * st->sectors * 512.0f) / (filesize * 1.0f);
           else
             percent = (blocks * st->sectors * 512.0f) / 
-              (max_sectors * st->sectors * 2.0f);
+              (st->max_sectors * st->sectors * 2.0f);
 
           long long time_to_go;
           time_to_go = (res.tv_sec*1.0) / 
@@ -1876,7 +1947,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
 
       // check whatever we have to leave the loop
       if (nread == 0 || nread == -1 || blocks >= number_of_blocks
-          || (max_sectors != 0 && blocks * st->sectors >= max_sectors ))
+          || (st->max_sectors != 0 && blocks * st->sectors >= st->max_sectors ))
         {
           long long high_dev=0;
           long long sum_invalid=0;
@@ -2240,6 +2311,11 @@ main(int argc, char **argv)
           fprintf(st.flog, "Testing only ranges specified in file %s\n", 
               read_sectors_from_file);
         }
+      if(st.max_sectors != 0)
+        {
+          fprintf(st.flog, "Limiting device size to %lli sectors\n", 
+              st.max_sectors);
+        }
       fprintf(st.flog, "Testing device at %s\n", st.filename);
       fprintf(st.flog, "Assuming %.0frpm disk with %iMiB cache\n", 
           1000/st.rotational_delay*60,
@@ -2597,8 +2673,8 @@ main(int argc, char **argv)
       usec);
 
   if (st.verbosity >= 0)
-    printf("tested %lli blocks (%lli errors, %lli samples)\n", 
-        st.number_of_blocks, st.errors, reads);
+    printf("tested %lli blocks (%lli errors, %lli samples)%s\n", 
+        st.number_of_blocks, st.errors, reads, CLEAR_LINE_END);
   if (st.flog != NULL)
     fprintf(st.flog, "tested %lli blocks (%lli errors, %lli samples)\n", 
         st.number_of_blocks, st.errors, reads);
@@ -2610,10 +2686,10 @@ main(int argc, char **argv)
   usec = floor((sum - sec * 1000 - msec)*1000);
 
   if (st.verbosity >= 0)
-    printf("mean block time: %.0fs.%.0fms.%.0fµs\n",
+    printf("mean block time: %.0fs.%.0fms.%.0fµs%s\n",
       sec,
       msec,
-      usec);
+      usec, CLEAR_LINE_END);
   if (st.flog != NULL)
     fprintf(st.flog, "mean block time: %.0fs.%.0fms.%.0fµs\n",
       sec,
@@ -2621,8 +2697,8 @@ main(int argc, char **argv)
       usec);
 
   if (st.verbosity >= 0)
-    printf("std dev: %.9f(ms)\n",
-        bi_stdev(&single_block));
+    printf("std dev: %.9f(ms)%s\n",
+        bi_stdev(&single_block), CLEAR_LINE_END);
   if (st.flog != NULL)
     fprintf(st.flog, "std dev: %.9f(ms)\n",
         bi_stdev(&single_block));
@@ -2661,7 +2737,61 @@ main(int argc, char **argv)
       st.vslow_lvl, st.vvslow, st.errors);
 
   if (st.verbosity >= 0)
-    printf("\n");
+    printf("%s\n", CLEAR_LINE_END);
+  if (st.flog != NULL)
+    fprintf(st.flog, "\n");
+
+  struct block_list_t *worst_blocks;
+  worst_blocks = find_worst_blocks(&st, block_info, st.number_of_blocks,
+      10);
+
+  if (st.verbosity >= 0)
+    printf("Worst blocks:%s\n", CLEAR_LINE_END);
+  if (st.flog != NULL)
+    fprintf(st.flog, "Worst blocks:\n");
+  if (st.verbosity >= 0)
+    printf("block no      st.dev  avg   tr. avg valid  samples%s\n", CLEAR_LINE_END);
+  if (st.flog != NULL)
+    fprintf(st.flog, "block no      st.dev  avg   tr. avg valid  samples\n");
+
+  size_t block_number=0;
+  while (!(worst_blocks[block_number].off == 0 && 
+      worst_blocks[block_number].len == 0))
+    {
+      size_t start = worst_blocks[block_number].off,
+            end = start + worst_blocks[block_number].len;
+
+      for(size_t i= start; i< end; i++)
+        {
+          double stdev = bi_int_rel_stdev(&block_info[i]);
+
+          if (st.verbosity >= 0)
+            printf("%12zi %7.4f %6.2f  %6.2f  %s %3zi%s\n", 
+                i, 
+                stdev,
+                bi_average(&block_info[i]),
+                bi_int_average(&block_info[i]),
+                (bi_is_valid(&block_info[i]))?"yes":"no ",
+                bi_num_samples(&block_info[i]),
+                CLEAR_LINE_END);
+
+          if (st.flog != NULL)
+            fprintf(st.flog, "%12zi %7.4f %6.2f  %6.2f  %s %3zi\n", 
+                i, 
+                stdev,
+                bi_average(&block_info[i]),
+                bi_int_average(&block_info[i]),
+                (bi_is_valid(&block_info[i]))?"yes":"no ",
+                bi_num_samples(&block_info[i])
+                );
+        }
+      block_number++;
+    }
+  if (st.verbosity >= 0)
+    printf("%s\n", CLEAR_LINE_END);
+  if (st.flog != NULL)
+    fprintf(st.flog, "\n");
+
   printf("Disk status: ");
 
   if (st.flog != NULL)
