@@ -204,6 +204,7 @@ usage(struct status_t *st)
   printf("-w, --bad-sectors FILE output file for the uncertain sectors\n");
   printf("-r, --read-sectors FILE list of ranges to scan instead of whole disk\n");
   printf("-l, --log FILE      log file to use\n");
+  printf("--quick             quick mode\n");
   printf("--nodirect          don't use O_DIRECT\n");
   printf("--noflush           don't flush system buffers before reading\n");
   printf("--nosync            don't use O_SYNC\n");
@@ -244,6 +245,9 @@ usage(struct status_t *st)
   printf("min-reads: 1, max-reads: 5, max-std-deviation: 0.75\n");
   printf("Background settings:\n");
   printf("min-reads: 3, max-reads: 20, max-std-deviation: 0.5\n");
+  printf("Quick settings:\n");
+  printf("min-reads: 1, max-reads: 10, max-std-deviation: 0.75\n");
+  printf("ignore blocks with time less than twice the rotational delay\n");
   printf("\n");
   printf("Format for the -o option is presented in the first line of file, block "
       "is a group\n");
