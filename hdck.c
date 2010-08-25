@@ -363,7 +363,9 @@ update_block_stats(struct status_t *st, struct block_info_t *block_info)
   for (size_t i=0; i< st->number_of_blocks; i++)
     {
       if (!bi_is_initialised(&block_info[i]))
-        continue;
+        {
+          continue;
+        }
 
       if (bi_is_valid(&block_info[i]) == 0)
         {
@@ -409,6 +411,65 @@ update_block_stats(struct status_t *st, struct block_info_t *block_info)
           ++st->vvslow;
         }
     }
+}
+
+void
+remove_block_from_stats(struct status_t *st, double time)
+{
+  if (time < st->vvfast_lvl)
+    st->vvfast--;
+  else if (time < st->vfast_lvl)
+    st->vfast--;
+  else if (time < st->fast_lvl)
+    st->fast--;
+  else if (time < st->normal_lvl)
+    st->normal--;
+  else if (time < st->slow_lvl)
+    st->slow--;
+  else if (time < st->vslow_lvl)
+    st->vslow--;
+  else
+    st->vvslow--;
+}
+
+void
+add_block_to_stats(struct status_t *st, double time)
+{
+  if (time < st->vvfast_lvl)
+    st->vvfast++;
+  else if (time < st->vfast_lvl)
+    st->vfast++;
+  else if (time < st->fast_lvl)
+    st->fast++;
+  else if (time < st->normal_lvl)
+    st->normal++;
+  else if (time < st->slow_lvl)
+    st->slow++;
+  else if (time < st->vslow_lvl)
+    st->vslow++;
+  else
+    st->vvslow++;
+}
+
+void
+add_block(struct status_t *st, struct block_info_t *block, double new_time)
+{
+  if (bi_is_initialised(block))
+    {
+      if (!bi_is_valid(block))
+        st->invalid--;
+      else
+        {
+          remove_block_from_stats(st, bi_int_average(block));
+        }
+    }
+
+  bi_add_time(block, new_time);
+
+  if (bi_is_valid(block))
+    add_block_to_stats(st, bi_int_average(block));
+  else
+    st->invalid++;
 }
 
 void
@@ -1405,13 +1466,53 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
 
           block_number++;
         }
-      else if (st->verbosity <= 3 && st->verbosity > 1)
+      else if (st->verbosity <= 3 && st->verbosity > 2)
         printf(".%s", CLEAR_LINE_END); // OK
       fflush(stdout);
 
+      if (block_data != NULL)
+        {
+
+          for (size_t i=0; i < length; i++)
+            {
+              if (bi_is_initialised(&block_info[offset+i]))
+                {
+                  if (!bi_is_valid(&block_info[offset+i]))
+                    st->invalid--;
+                  else
+                    remove_block_from_stats(st, 
+                        bi_int_average(&block_info[offset+i]));
+                }
+
+              bi_add_valid(&block_info[offset+i], &block_data[i]);
+              
+              if (bi_is_valid(&block_info[offset+1]))
+                add_block_to_stats(st, bi_int_average(&block_info[offset+i]));
+              else
+                st->invalid++;
+            }
+
+          update_block_stats(st, block_info);
+
+          if (st->sector_times == PRINT_SYMBOLS)
+            printf("====>");
+          // add values from block_data to statistics
+          for (size_t i=0; i < length; i++)
+            {
+              double *times;
+              size_t len;
+              times = bi_get_times(&block_data[i]);
+              len = bi_num_samples(&block_data[i]);
+              for (size_t j=0; j < len; j++)
+                {
+                  add_sample_to_stats(st, times[j]);
+                }
+            }
+        }
+
       // print statistics
-      if (st->verbosity >= 0 && (block_number % 10 == 0 || blocks_read % 32 == 0 
-          || blocks_read == total_blocks || blocks_read == 2))
+      if (st->verbosity >= 0 ) //&& (block_number % 10 == 0 || blocks_read % 32 == 0 
+//          || blocks_read == total_blocks || blocks_read == 2))
         {
           clock_gettime(TIMER_TYPE, &end_time);
           diff_time(&res, start_time, end_time);
@@ -1423,8 +1524,6 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
           time_to_go = time_double(res) / percent;
           if (st->verbosity > 1)
             printf("\n");
-
-          update_block_stats(st, block_info);
 
           printf("reread %.2f%% done "
               "in %02li:%02li:%02li, expected time:"
@@ -1550,26 +1649,6 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
 
       if (block_data == NULL)
         continue;
-
-      for (size_t i=0; i < length; i++)
-        {
-          bi_add_valid(&block_info[offset+i], &block_data[i]);
-        }
-
-      if (st->sector_times == PRINT_SYMBOLS)
-        printf("====>");
-      // add values from block_data to statistics
-      for (size_t i=0; i < length; i++)
-        {
-          double *times;
-          size_t len;
-          times = bi_get_times(&block_data[i]);
-          len = bi_num_samples(&block_data[i]);
-          for (size_t j=0; j < len; j++)
-            {
-              add_sample_to_stats(st, times[j]);
-            }
-        }
 
       // free the block_data structure
       for (size_t i=0; i< length; i++)
@@ -1791,6 +1870,9 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
                ((off_t)blocks) * st->sectors, ((off_t)blocks+1)*st->sectors-1,
                CLEAR_LINE_END);
 
+          if (bi_is_initialised(&block_info[blocks]))
+            st->invalid++;
+
           st->tot_interrupts++;
 
           diff_time(&res, time1, time2);
@@ -1814,6 +1896,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           // invalidate last read block
           if (blocks > 0 && bi_is_valid(&block_info[blocks-1]))
             bi_remove_last(&block_info[blocks-1]);
+
+          update_block_stats(st, block_info);
         }
       else // when the read was correct
         {
@@ -1829,8 +1913,11 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
                 {
                   // first valid read
                   bi_clear(&block_info[blocks]);
+                  add_block(st, &block_info[blocks], time_double(res));
                   bi_make_valid(&block_info[blocks]);
-                  bi_add_time(&block_info[blocks], time_double(res));
+                  st->invalid--;
+                  add_block_to_stats(st, time_double(res));
+                  //bi_add_time(&block_info[blocks], time_double(res));
 
                   if (st->verbosity > 10)
                     printf("block: %zi, samples: %zi, average: "
@@ -1845,7 +1932,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
               else
                 {
                   // subsequent valid or invalid reads
-                  bi_add_time(&block_info[blocks], time_double(res));
+                  add_block(st, &block_info[blocks], time_double(res));
+                  //bi_add_time(&block_info[blocks], time_double(res));
 
                   if (st->verbosity > 10)
                     printf("block: %zi, samples: %zi, average: "
@@ -1876,12 +1964,12 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
       blocks++;
       abs_blocks++;
 
-      if (blocks % 1000 == 0 && st->verbosity >= 0)
+      if (blocks % 500 == 0 && st->verbosity >= 0)
         {
           clock_gettime(TIMER_TYPE, &timee);
           diff_time(&res, time1, time2);
 
-          update_block_stats(st, block_info);
+//          update_block_stats(st, block_info);
 
           float cur_speed;
           cur_speed = st->sectors * 512 / 1024 * 1.0f / 1024 / 
@@ -2750,9 +2838,11 @@ main(int argc, char **argv)
   if (st.flog != NULL)
     fprintf(st.flog, "Worst blocks:\n");
   if (st.verbosity >= 0)
-    printf("block no      st.dev  avg   tr. avg valid  samples%s\n", CLEAR_LINE_END);
+    printf("block no      st.dev  avg   tr. avg max     min     valid  "
+        "samples%s\n", CLEAR_LINE_END);
   if (st.flog != NULL)
-    fprintf(st.flog, "block no      st.dev  avg   tr. avg valid  samples\n");
+    fprintf(st.flog, "block no      st.dev  avg   tr. avg max     min    valid  "
+        "samples\n");
 
   size_t block_number=0;
   while (!(worst_blocks[block_number].off == 0 && 
@@ -2764,23 +2854,28 @@ main(int argc, char **argv)
       for(size_t i= start; i< end; i++)
         {
           double stdev = bi_int_rel_stdev(&block_info[i]);
+          stdev = bi_stdev(&block_info[i]);
 
           if (st.verbosity >= 0)
-            printf("%12zi %7.4f %6.2f  %6.2f  %s %3zi%s\n", 
+            printf("%12zi %7.4f %6.2f %7.2f %7.2f %7.2f  %s %3zi%s\n", 
                 i, 
                 stdev,
                 bi_average(&block_info[i]),
                 bi_int_average(&block_info[i]),
+                bi_max(&block_info[i]),
+                bi_min(&block_info[i]),
                 (bi_is_valid(&block_info[i]))?"yes":"no ",
                 bi_num_samples(&block_info[i]),
                 CLEAR_LINE_END);
 
           if (st.flog != NULL)
-            fprintf(st.flog, "%12zi %7.4f %6.2f  %6.2f  %s %3zi\n", 
+            fprintf(st.flog, "%12zi %7.4f %6.2f %7.2f %7.2f %7.2f  %s %3zi\n", 
                 i, 
                 stdev,
                 bi_average(&block_info[i]),
                 bi_int_average(&block_info[i]),
+                bi_max(&block_info[i]),
+                bi_min(&block_info[i]),
                 (bi_is_valid(&block_info[i]))?"yes":"no ",
                 bi_num_samples(&block_info[i])
                 );
@@ -2837,7 +2932,8 @@ main(int argc, char **argv)
             "sectors that required more than 2 read attempts "
             "detected\n");
     }
-  else if ((st.normal * 1.0) / (st.number_of_blocks * 1.0) > 0.001)
+  else if (((st.normal * 1.0) / (st.number_of_blocks * 1.0) > 0.001 && !st.quick)
+      || ((st.normal * 1.0) / (st.number_of_blocks * 1.0) > 0.25 && st.quick))
     {
       printf("moderate\n"
           "high number of blocks that required more than 1 "

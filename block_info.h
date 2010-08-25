@@ -119,6 +119,12 @@ double
 bi_max(struct block_info_t* block_info) PURE_FUNCTION;
 
 /**
+ * find shortest read in samples
+ */
+double
+bi_min(struct block_info_t* block_info) PURE_FUNCTION;
+
+/**
  * return relative standard deviation for samples (stdev/mean)
  */
 double

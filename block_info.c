@@ -102,7 +102,7 @@ bi_add_time(struct block_info_t* block_info, double time)
 }
 
 /** 
- * add anouther block_info 
+ * add another block_info 
  */
 void
 bi_add(struct block_info_t* sum, struct block_info_t* adder)
@@ -252,6 +252,26 @@ bi_max(struct block_info_t* block_info)
 
   for (size_t i=0; i < block_info->samples_len; i++)
     if (ret < block_info->samples[i])
+      ret = block_info->samples[i];
+
+  return ret;
+}
+
+/**
+ * find shortest read in samples
+ */
+double
+bi_min(struct block_info_t* block_info)
+{
+  double ret;
+
+  if (block_info->samples_len == 0)
+    return 0.0;
+
+  ret = block_info->samples[0];
+
+  for (size_t i=0; i < block_info->samples_len; i++)
+    if (ret > block_info->samples[i])
       ret = block_info->samples[i];
 
   return ret;
