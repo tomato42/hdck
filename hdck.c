@@ -212,7 +212,7 @@ usage(struct status_t *st)
   printf("--nortio            don't change IO priority to real-time\n");
   printf("--nort              don't make the process real-time\n");
   printf("--sector-symbols    print symbols representing read time of each"
-                                                       " group of sectors\n");
+                                                       " block\n");
   printf("--sector-times      print time it takes to read each group of"
                                                         " sectors (in µs)\n");
   printf("--min-reads NUM     minimal number of valid reads for a sector\n");
@@ -229,11 +229,11 @@ usage(struct status_t *st)
   printf("--version           write version information\n");
   printf("-h, -?              print this message\n");
   printf("\n");
-  printf("This program can be run on both files and devices, though running it on"
-      " top of\n");
-  printf("a file is quite pointless. In most cases default settings should be OK."
-      " Things to\n");
-  printf("check are --nodirect and --noflush.\n");
+  printf("This program can be run on both files and devices, though running it"
+      " on top of\n");
+  printf("a file is quite pointless. In most cases default settings should be"
+      " OK. Things\n");
+  printf("to check are --nodirect and --noflush.\n");
   printf("When using -x, the program trusts the sector times more\n");
   printf("and as a result, should achive minimum confidence in less time "
       "(by not using re-\n");
@@ -249,11 +249,11 @@ usage(struct status_t *st)
   printf("min-reads: 1, max-reads: 10, max-std-deviation: 0.75\n");
   printf("ignore blocks with time less than twice the rotational delay\n");
   printf("\n");
-  printf("Format for the -o option is presented in the first line of file, block "
-      "is a group\n");
-  printf("of %zi sectors (%zi bytes). Consecutive lines in files for -r and -w"
-      " are ranges\n", st->sectors, st->sectors * 512);
-  printf("of LBAs to scan to.\n");
+  printf("Format for the -o option is presented in the first line of file, "
+      "block is \n\n");
+  printf("a group of %zi sectors (%zi bytes). Consecutive lines in files for "
+      "-r and\n", st->sectors, st->sectors * 512);
+  printf("-w are ranges of LBAs to scan to.\n");
 }
 
 void
