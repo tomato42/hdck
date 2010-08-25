@@ -1,3 +1,12 @@
+v 0.3.0 - 2010-08-25
+--------------------
+
+  * reduce number of global variables
+  * quick mode
+  * more verbose on-line status reporting
+  * printing 10 worst (slowest) blocks in result
+    std dev, min, max, avg, truncated avg, no of samples
+
 v 0.2.6 - 2010-08-22
 --------------------
 
