@@ -155,6 +155,24 @@ bi_num_samples(struct block_info_t* block_info) PURE_FUNCTION;
 double
 bi_trunc_average(struct block_info_t* block_info, double percent) PURE_FUNCTION;
 
+/**
+ * return k-th quantile of q order using standard R algorithm
+ * @parm block_info block data to analise
+ * @parm k ordinal of quantile to return (q/2 for median)
+ * @parm q order of quantiles (4 for quartiles, 10 for deciles)
+ */
+double
+bi_quantile(struct block_info_t* block_info, int k, int q) PURE_FUNCTION;
+
+/**
+ * return k-th quantile of q order using exact algorithm
+ * @parm block_info block data to analise
+ * @parm k ordinal of quantile to return (q/2 for median)
+ * @parm q order of quantiles (4 for quartiles, 10 for deciles)
+ */
+double
+bi_quantile_exact(struct block_info_t* block_info, int k, int q) PURE_FUNCTION;
+
 /** 
  * return inteligent mean for samples
  */

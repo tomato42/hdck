@@ -400,6 +400,84 @@ bi_trunc_average(struct block_info_t* block_info, double percent)
   return sum / (high - low);
 }
 
+/**
+ * return k-th quantile of q order using interpolating algorithm
+ * @parm block_info block data to analise
+ * @parm k ordinal of quantile to return (q/2 for median)
+ * @parm q order of quantiles (4 for quartiles, 10 for deciles)
+ */
+double
+bi_quantile(struct block_info_t* block_info, int k, int q)
+{
+  assert(k<=q);
+
+  if (block_info->samples_len == 1)
+    return block_info->samples[0];
+
+  // sort samples
+  double *tmp;
+
+  tmp = malloc(sizeof(double) * block_info->samples_len);
+  if(!tmp)
+    err(1, "bi_quantile");
+
+  memcpy(tmp, block_info->samples, block_info->samples_len * sizeof(double));
+  qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
+
+  // find quantile
+  double h;
+  double p = k*1.0/(q*1.0);
+
+  h = (block_info->samples_len-1)*p+1-1;
+
+  int h_fl = floor(h);
+  
+  double ret = tmp[h_fl] + (h-h_fl)*(tmp[h_fl+1]-tmp[h_fl]);
+  free(tmp);
+
+  return ret;
+}
+
+/**
+ * return k-th quantile of q order using exact algorithm
+ * @parm block_info block data to analise
+ * @parm k ordinal of quantile to return (q/2 for median)
+ * @parm q order of quantiles (4 for quartiles, 10 for deciles)
+ */
+double
+bi_quantile_exact(struct block_info_t* block_info, int k, int q)
+{
+  assert(k<=q);
+
+  if (block_info->samples_len == 1)
+    return block_info->samples[0];
+
+  // sort samples
+  double *tmp;
+
+  tmp = malloc(sizeof(double) * block_info->samples_len);
+  if(!tmp)
+    err(1, "bi_quantile");
+
+  memcpy(tmp, block_info->samples, block_info->samples_len * sizeof(double));
+  qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
+
+  // find quantile
+  double h;
+  double p = k*1.0/(q*1.0);
+  double ret;
+
+  h = (block_info->samples_len)*p;
+
+  int h_fl = nearbyint(h)-1;
+  if (h_fl < 0) h_fl = 0;
+  
+  ret = tmp[h_fl];
+
+  free(tmp);
+  return ret;
+}
+
 /** 
  * return inteligent mean for samples
  */
