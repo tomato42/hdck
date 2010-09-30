@@ -90,7 +90,7 @@ struct status_t {
     int noflush; /**< whatever to flush all buffers before run */
     /** minimal number of reads for a sector to be considered valid */
     size_t min_reads;
-    /** maximal number of samples taken before giving up */
+    /** maximal number of additional samples taken before giving up */
     size_t max_reads;
     /** maximal standard deviation accepted for a block */
     double max_std_dev;
@@ -2265,7 +2265,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           else
             break;
 
-          if (loop > st->max_reads)
+          if (loop > st->max_reads + st->min_reads)
             {
               printf("Warning: read whole disk %zi times, still "
                   "can't get high confidence%s\n", st->max_reads, CLEAR_LINE_END);
