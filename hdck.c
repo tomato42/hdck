@@ -59,7 +59,7 @@ const struct version_t {
     const int major;
     const int minor;
     const int revision;
-} version = {0, 3, 0};
+} version = {0, 4, 0};
 
 /** structure representing program status */
 struct status_t {
@@ -220,12 +220,13 @@ usage(struct status_t *st)
   printf("--max-reads NUM     maximal number of re-reads for a sector\n");
   printf("--max-std-deviation NUM minimal relative stdandard deviation for "
       "a sector to be\n");
-  printf("                    considered valid\n");
+  printf("                    considered valid (ignored)\n");
   printf("--max-sectors NUM   read at most NUM sectors\n");
   printf("--disk-cache NUM    size of the on-board disk cache in MiB (default"
       " 32)\n");
   printf("--disk-rpm NUM      disk RPM (7200 by default)\n");
   printf("--noverbose         reduce verbosity\n");
+  printf("--no-usb            not testing over USB bridge\n");
   printf("-v, --verbose       be more verbose\n");
   printf("--version           write version information\n");
   printf("-h, -?              print this message\n");
@@ -241,13 +242,13 @@ usage(struct status_t *st)
   printf("-reads, much)\n");
   printf("\n");
   printf("Default settings:\n");
-  printf("min-reads: 3, max-reads: 10, max-std-deviation: 0.5\n");
+  printf("min-reads: 3, max-reads: 30, max-std-deviation: 0.5\n");
   printf("Exclusive settings:\n");
-  printf("min-reads: 1, max-reads: 5, max-std-deviation: 0.75\n");
+  printf("min-reads: 1, max-reads: 20, max-std-deviation: 0.75\n");
   printf("Background settings:\n");
-  printf("min-reads: 3, max-reads: 20, max-std-deviation: 0.5\n");
+  printf("min-reads: 3, max-reads: 50, max-std-deviation: 0.5\n");
   printf("Quick settings:\n");
-  printf("min-reads: 1, max-reads: 10, max-std-deviation: 0.75\n");
+  printf("min-reads: 1, max-reads: 50, max-std-deviation: 0.75\n");
   printf("ignore blocks with time less than twice the rotational delay\n");
   printf("\n");
   printf("Format for the -o option is presented in the first line of file, "
@@ -324,6 +325,49 @@ times_time(struct timespec *res, long long multiplicator)
   return;
 }
 
+static int
+__off_t_compare(const void *a, const void *b)
+{
+  off_t x,y;
+  x = ((struct block_list_t*)a)->off;
+  y = ((struct block_list_t*)b)->off;
+
+  if (x<y)
+    return -1;
+  else if (x==y)
+    return 0;
+  else
+    return 1;
+}
+
+void
+sort_worst_block_list(struct status_t *st, 
+    struct block_info_t *block_info, size_t block_info_len, 
+    struct block_list_t *block_list, size_t block_list_len)
+{
+  for (size_t i=0; i<block_list_len; i++)
+    {
+      for (size_t j=0; j<block_list_len-1; j++)
+        {
+          if ((!bi_is_initialised(&block_info[block_list[j].off]) &&
+               bi_is_initialised(&block_info[block_list[j+1].off]))
+             ||
+             (!bi_is_valid(&block_info[block_list[j].off]) &&
+               bi_is_valid(&block_info[block_list[j+1].off]))
+             ||
+             (bi_quantile(&block_info[block_list[j].off],9,10) >
+                bi_quantile(&block_info[block_list[j+1].off],9,10)))
+            {
+              off_t tmp;
+              tmp = block_list[j].off;
+              block_list[j].off = block_list[j+1].off;
+              block_list[j+1].off = tmp;
+            }
+        }
+    }
+}
+
+
 /**
  * convert struct timespec to double
  */
@@ -380,10 +424,6 @@ update_block_stats(struct status_t *st, struct block_info_t *block_info)
 
       double avg;
 
-      if (bi_num_samples(&block_info[i]) < 5)
-        avg = bi_average(&block_info[i]);
-      else
-        avg = bi_trunc_average(&block_info[i], 0.25);
       avg = bi_quantile(&block_info[i],9,10);
 
       st->errors += bi_get_error(&block_info[i]);
@@ -1071,6 +1111,7 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
   struct block_list_t* block_list;
   struct block_list_t* ret;
   size_t uncertain = 0;
+  size_t invalid = 0;
 
   if (offset > block_info_len || offset < 0)
     return NULL;
@@ -1092,8 +1133,13 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
           block_list[uncertain].off = block_no;
           block_list[uncertain].len = 1;
           uncertain++;
+          invalid++;
           continue;
         }
+
+      // first, make all reads valid in quick mode
+      if (st->quick && invalid)
+        continue;
 
       // ignore fast sectors
       if (bi_quantile(&block_info[block_no],9,10) < st->fast_lvl)
@@ -1109,7 +1155,9 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
           continue;
         }
 
-      if (bi_quantile(&block_info[block_no],9,10) >= st->normal_lvl && bi_num_samples(&block_info[block_no]) < 15)
+      // big claims need big evidence
+      if (bi_quantile(&block_info[block_no],9,10) >= st->normal_lvl 
+          && bi_num_samples(&block_info[block_no]) < 15)
         {
           block_list[uncertain].off = block_no;
           block_list[uncertain].len = 1;
@@ -1117,7 +1165,8 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
           continue;
         }
 
-      if (bi_quantile(&block_info[block_no],9,10) >= st->slow_lvl && bi_num_samples(&block_info[block_no]) < 20)
+      if (bi_quantile(&block_info[block_no],9,10) >= st->slow_lvl 
+          && bi_num_samples(&block_info[block_no]) < 20)
         {
           block_list[uncertain].off = block_no;
           block_list[uncertain].len = 1;
@@ -1125,6 +1174,7 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
           continue;
         }
 
+      // process only sectors with slow sectors
       if (bi_quantile(&block_info[block_no],9,10) >= st->fast_lvl)
         {
           double lq, max;
@@ -1158,6 +1208,25 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
               else // single re-read only, ignore
                 continue;
             }
+
+          if (num_samples <= 5)
+            {
+              if (lq > st->fast_lvl)
+                {
+                  // if more than 4 reads show the sector as slower than
+                  // rotational delay, the sector is ceratainly shot
+                  if (certain_bad == 1)
+                    {
+                      block_list[uncertain].off = block_no;
+                      block_list[uncertain].len = 1;
+                      uncertain++;
+                      continue;
+                    }
+                  else
+                    continue;
+                }
+            }
+
           if (num_samples < 20)
             {
               double high,med;
@@ -1177,7 +1246,7 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
                     continue; // certain bad
                 }
 
-              // if difference is more than 2 rotational delays more reads are needed
+              // if difference is greater than 2 rotational delays more reads are needed
               if (max/st->fast_lvl - high/st->fast_lvl >= 2 && num_samples < 15)
                 {
                   block_list[uncertain].off = block_no;
@@ -1212,7 +1281,8 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
                     }
                 }
 
-              if (bi_quantile_exact(&block_info[block_no],num_samples-2,num_samples) > st->fast_lvl)
+              if (bi_quantile_exact(&block_info[block_no],num_samples-2
+                    ,num_samples) > st->fast_lvl)
                 {
                   if (certain_bad == 1)
                     {
@@ -1239,111 +1309,41 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
           else
             continue;
         }
-
-      // XXX won't be reached
-
-
-      // ignore single re-reads or blocks that could be assigned as such 
-      // if in quick mode
-      if (certain_bad == 0 && st->quick)
-        {
-          if (bi_max(&block_info[block_no]) < st->normal_lvl)
-            continue;
-          if (bi_max(&block_info[block_no]) < st->slow_lvl &&
-              bi_average(&block_info[block_no]) < st->normal_lvl &&
-              bi_num_samples(&block_info[block_no]) > 2)
-            continue;
-        }
-
-      // don't list blocks with one reread in quick mode
-      if (certain_bad == 1 && st->quick)
-        {
-          if (bi_max(&block_info[block_no]) < st->slow_lvl &&
-              bi_average(&block_info[block_no]) < st->normal_lvl)
-            continue;
-        }
-
-      // do not re-read blocks with high std dev if all reads are much
-      // lower than rotational delay
-      if (soft_delay &&
-          (
-           (
-            bi_num_samples(&block_info[block_no]) > 2 &&
-            bi_max(&block_info[block_no]) < delay / 2.0
-           )
-           ||
-           (
-            bi_num_samples(&block_info[block_no]) > 1 &&
-            bi_max(&block_info[block_no]) < delay  &&
-            bi_int_rel_stdev(&block_info[block_no]) < min_std_dev * 2
-           )
-          )
-         )
-        {
-          continue;
-        }
-
-      // do not re-read blocks if we look for uncertain only and standard 
-      // deviation is low
-      if (certain_bad == 0 && 
-          bi_int_rel_stdev(&block_info[block_no]) <= min_std_dev)
-            continue;
-
-      if (!soft_delay &&
-          bi_max(&block_info[block_no]) < delay)
-        continue;
-
-      if (bi_int_average(&block_info[block_no]) > delay ||
-          bi_int_rel_stdev(&block_info[block_no]) > min_std_dev)
-        {
-          block_list[uncertain].off = block_no;
-          block_list[uncertain].len = 1;
-          uncertain++;
-          continue;
-        }
-
-      if (bi_num_samples(&block_info[block_no]) == 1)
-        {
-          double sum;
-          if (block_no < 4)
-            {
-              sum = bi_average(&block_info[block_no+1]) +
-                bi_average(&block_info[block_no+2]) +
-                bi_average(&block_info[block_no+3]) +
-                bi_average(&block_info[block_no+4]) +
-                bi_average(&block_info[block_no+5]);
-            }
-          else if (block_no > block_info_len - 3)
-            {
-              sum = bi_average(&block_info[block_no-1]) +
-                bi_average(&block_info[block_no-2]) +
-                bi_average(&block_info[block_no-3]) +
-                bi_average(&block_info[block_no-4]) +
-                bi_average(&block_info[block_no-5]);
-            }
-          else
-            {
-              sum = bi_average(&block_info[block_no-1]) +
-                bi_average(&block_info[block_no-2]) +
-                bi_average(&block_info[block_no-3]) +
-                bi_average(&block_info[block_no+1]) +
-                bi_average(&block_info[block_no+2]);
-            }
-
-          if (sum/5.0*4 < bi_average(&block_info[block_no]))
-            {
-              block_list[uncertain].off = block_no;
-              block_list[uncertain].len = 1;
-              uncertain++;
-              continue;
-            }
-        }
     }
 
   if (uncertain == 0)
     {
       free(block_list);
       return NULL;
+    }
+
+  // recheck only the worst sectors in quick mode
+  if (st->quick && !invalid)
+    {
+      sort_worst_block_list(st, block_info, block_info_len, block_list, 
+          uncertain);
+      // XXX minor hack, should check the loop variable
+      if (bi_num_samples(&block_info[64]) <= 1 
+          || bi_num_samples(&block_info[512]) <= 1)
+        {
+          if (uncertain > 1024)
+            {
+              block_list[1024].off = 0;
+              block_list[1024].len = 0;
+              uncertain = 1024;
+            }
+        }
+      else
+        {
+          if (uncertain > 64)
+            {
+              block_list[64].off = 0;
+              block_list[64].len = 0;
+              uncertain = 64;
+            }
+        }
+      
+      qsort(block_list, uncertain, sizeof(struct block_list_t), __off_t_compare);
     }
 
   if (glob == 1)
@@ -1379,27 +1379,6 @@ find_uncertain_blocks(struct status_t *st, struct block_info_t* block_info,
 {
   return find_bad_blocks(st, block_info, block_info_len, min_std_dev,
       min_reads, glob, offset, delay, soft_delay, 0);
-}
-
-void
-sort_worst_block_list(struct status_t *st, 
-    struct block_info_t *block_info, size_t block_info_len, 
-    struct block_list_t *block_list, size_t block_list_len)
-{
-  for (size_t i=0; i<block_list_len; i++)
-    {
-      for (size_t j=0; j<block_list_len-1; j++)
-        {
-          if (bi_quantile(&block_info[block_list[j].off],9,10) >
-                bi_quantile(&block_info[block_list[j+1].off],9,10))
-            {
-              off_t tmp;
-              tmp = block_list[j].off;
-              block_list[j].off = block_list[j+1].off;
-              block_list[j+1].off = tmp;
-            }
-        }
-    }
 }
 
 struct block_list_t*
@@ -2477,7 +2456,7 @@ main(int argc, char **argv)
         break;
 
     case 'b':
-        st.max_reads = 20;
+        st.max_reads = 50;
         st.noaffinity = 1;
         st.nortio = 1;
         st.no_rt = 1;
@@ -2530,7 +2509,7 @@ main(int argc, char **argv)
       if (st.min_reads == 0)
         st.min_reads = 1;
       if (st.max_reads == 0)
-        st.max_reads = 5;
+        st.max_reads = 20;
       if (st.max_std_dev == 0)
         st.max_std_dev = 0.75;
     }
@@ -2539,7 +2518,7 @@ main(int argc, char **argv)
       if (st.min_reads == 0)
         st.min_reads = 1;
       if (st.max_reads == 0)
-        st.max_reads = 10;
+        st.max_reads = 50;
       if (st.max_std_dev == 0)
         st.max_std_dev = 0.75;
     }
@@ -2548,7 +2527,7 @@ main(int argc, char **argv)
       if (st.min_reads == 0)
         st.min_reads = 3;
       if (st.max_reads == 0)
-        st.max_reads = 10;
+        st.max_reads = 30;
       if (st.max_std_dev == 0)
         st.max_std_dev = 0.5;
     }
@@ -3031,10 +3010,10 @@ main(int argc, char **argv)
   if (st.flog != NULL)
     fprintf(st.flog, "Worst blocks:\n");
   if (st.verbosity >= 0)
-    printf("block no      st.dev  avg   med    max     min     valid "
+    printf("block no      st.dev  avg   1stQ    med     3rdQ   valid "
         "samples 9th decile%s\n", CLEAR_LINE_END);
   if (st.flog != NULL)
-    fprintf(st.flog, "block no      st.dev  avg   med     max     min    valid "
+    fprintf(st.flog, "block no      st.dev  avg   1stQ     med     3rdQ  valid "
         "samples 9th decile\n");
 
   size_t block_number=0;
@@ -3054,9 +3033,9 @@ main(int argc, char **argv)
                 i, 
                 stdev,
                 bi_average(&block_info[i]),
-                bi_quantile(&block_info[i],1,2),
-                bi_max(&block_info[i]),
-                bi_min(&block_info[i]),
+                bi_quantile(&block_info[i],1,4),
+                bi_quantile(&block_info[i],2,4),
+                bi_quantile(&block_info[i],3,4),
                 (bi_is_valid(&block_info[i]))?"yes":"no ",
                 bi_num_samples(&block_info[i]),
                 bi_quantile(&block_info[i],9,10),
@@ -3067,9 +3046,9 @@ main(int argc, char **argv)
                 i, 
                 stdev,
                 bi_average(&block_info[i]),
-                bi_quantile(&block_info[i],1,2),
-                bi_max(&block_info[i]),
-                bi_min(&block_info[i]),
+                bi_quantile(&block_info[i],1,4),
+                bi_quantile(&block_info[i],2,4),
+                bi_quantile(&block_info[i],3,4),
                 (bi_is_valid(&block_info[i]))?"yes":"no ",
                 bi_num_samples(&block_info[i]),
                 bi_quantile(&block_info[i],9,10)
