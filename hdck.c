@@ -1320,11 +1320,10 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
   // recheck only the worst sectors in quick mode
   if (st->quick && !invalid)
     {
+      static int first = 1;
       sort_worst_block_list(st, block_info, block_info_len, block_list, 
           uncertain);
-      // XXX minor hack, should check the loop variable
-      if (bi_num_samples(&block_info[64]) <= 1 
-          || bi_num_samples(&block_info[512]) <= 1)
+      if (first)
         {
           if (uncertain > 1024)
             {
@@ -1332,6 +1331,7 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
               block_list[1024].len = 0;
               uncertain = 1024;
             }
+          first--;
         }
       else
         {
