@@ -234,28 +234,30 @@ usage(struct status_t *st)
   printf("This program can be run on both files and devices, though running it"
       " on top of\n");
   printf("a file is quite pointless. In most cases default settings should be"
-      " OK. Things\n");
-  printf("to check are --nodirect and --noflush.\n");
+      " OK. If your\n");
+  printf("computer slows to a crawl while testing, try --nodirect and --noflush.\n");
   printf("When using -x, the program trusts the sector times more\n");
   printf("and as a result, should achive minimum confidence in less time "
-      "(by not using re-\n");
-  printf("-reads, much)\n");
+      "(by using\n");
+  printf("less re-reads)\n");
   printf("\n");
   printf("Default settings:\n");
-  printf("min-reads: 3, max-reads: 30, max-std-deviation: 0.5\n");
+  printf("min-reads: 3, max-reads: 30, max-std-deviation: 0.5\n\n");
   printf("Exclusive settings:\n");
-  printf("min-reads: 1, max-reads: 20, max-std-deviation: 0.75\n");
+  printf("min-reads: 1, max-reads: 20, max-std-deviation: 0.75\n\n");
   printf("Background settings:\n");
-  printf("min-reads: 3, max-reads: 50, max-std-deviation: 0.5\n");
+  printf("min-reads: 3, max-reads: 50, max-std-deviation: 0.5\n\n");
   printf("Quick settings:\n");
   printf("min-reads: 1, max-reads: 50, max-std-deviation: 0.75\n");
-  printf("ignore blocks with time less than twice the rotational delay\n");
+  printf("ignore blocks with time less than twice the rotational delay and"
+      " validate only\n");
+  printf("64 worst blocks\n");
   printf("\n");
-  printf("Format for the -o option is presented in the first line of file, "
-      "block is \n\n");
+  printf("Format for the -o option is presented in the first line of file. "
+      "Block is \n\n");
   printf("a group of %zi sectors (%zi bytes). Consecutive lines in files for "
       "-r and\n", st->sectors, st->sectors * 512);
-  printf("-w are ranges of LBAs to scan to.\n");
+  printf("-w are ranges of LBAs to scan.\n");
 }
 
 void
@@ -1327,6 +1329,14 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
         {
           if (uncertain > 1024)
             {
+              // move 1024 worst blocks from the bottom part
+              size_t from, dest;
+              for (from = uncertain - 1, dest = 1023;
+                  dest >= 0;
+                  from--, dest--);
+                {
+                  block_list[from].off = block_list[dest].off;
+                }
               block_list[1024].off = 0;
               block_list[1024].len = 0;
               uncertain = 1024;
@@ -1337,6 +1347,14 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
         {
           if (uncertain > 64)
             {
+              // move 64 worst blocks up
+              size_t from, dest;
+              for (from = uncertain - 1, dest = 63;
+                  dest >= 0;
+                  from--, dest--);
+                {
+                  block_list[from].off = block_list[dest].off;
+                }
               block_list[64].off = 0;
               block_list[64].len = 0;
               uncertain = 64;
@@ -2360,10 +2378,10 @@ main(int argc, char **argv)
         {"nort", 0, &st.no_rt, 1}, // 17
         {"background", 0, 0, 'b'}, // 18
         {"disk-rpm", 1, 0, 0}, // 19
-        {"bad-sectors", 0, 0, 'w'}, // 20
-        {"read-sectors", 0, 0, 'r'}, // 21
+        {"bad-sectors", 1, 0, 'w'}, // 20
+        {"read-sectors", 1, 0, 'r'}, // 21
         {"version", 0, 0, 0}, // 22
-        {"log", 0, 0, 'l'}, // 23
+        {"log", 1, 0, 'l'}, // 23
         {"quick", 0, &st.quick, 1}, // 24
         {"no-usb", 0, 0, 0}, // 25
         {0, 0, 0, 0}
