@@ -1695,7 +1695,8 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
               res.tv_sec/3600, res.tv_sec/60%60, res.tv_sec%60,
               time_to_go/3600, time_to_go/60%60, time_to_go%60,
               CLEAR_LINE_END);
-          printf("         Samples:             Blocks:%s\n", CLEAR_LINE_END);
+          printf("         Samples:             Blocks (9th decile):%s\n",
+              CLEAR_LINE_END);
           printf("<%4.1fms: %20lli %20lli%s\n", st->vvfast_lvl, st->tot_vvfast,
               st->vvfast, CLEAR_LINE_END);
           printf("<%4.1fms: %20lli %20lli%s\n", st->vfast_lvl, st->tot_vfast,
@@ -2175,7 +2176,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           printf("Expected time: %02lli:%02lli:%02lli%s\n",
               time_to_go/3600, time_to_go/60%60, time_to_go%60,
               CLEAR_LINE_END);
-          printf("         Samples:             Blocks:%s\n", CLEAR_LINE_END);
+          printf("         Samples:             Blocks (9th decile):%s\n",
+              CLEAR_LINE_END);
           printf("<%4.1fms: %20lli %20lli%s\n", st->vvfast_lvl, st->tot_vvfast,
               st->vvfast, CLEAR_LINE_END);
           printf("<%4.1fms: %20lli %20lli%s\n", st->vfast_lvl, st->tot_vfast,
