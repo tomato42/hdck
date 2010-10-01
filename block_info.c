@@ -411,6 +411,9 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
 {
   assert(k<=q);
 
+  if (block_info->samples_len == 0)
+    return NAN;
+
   if (block_info->samples_len == 1)
     return block_info->samples[0];
 
