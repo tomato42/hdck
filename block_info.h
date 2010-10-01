@@ -36,6 +36,7 @@ struct block_info_t {
     short int valid; ///< 0 if data is invalid (because read was interrupted)
     unsigned short int error; ///< number of IO errors that occured while reading
                               /// the block
+    double last; ///< last sample collected
 };
 
 /**

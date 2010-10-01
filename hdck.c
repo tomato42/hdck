@@ -1122,196 +1122,213 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
   if (block_list == NULL)
     err(EXIT_FAILURE, "find_uncertain_blocks");
 
-  // find uncertain blocks
-  for (size_t block_no=offset; block_no < block_info_len; block_no++)
+  // first thing to do in quick mode, is to get rid of invalid blocks
+  if (st->quick && !certain_bad)
     {
-      if (!bi_is_initialised(&block_info[block_no]))
-        continue;
-
-      // re-read blocks that didn't receive their share of proper reads
-      if (bi_num_samples(&block_info[block_no]) < min_reads ||
-          !bi_is_valid(&block_info[block_no]))
+      for (size_t block_no=offset; block_no < block_info_len; block_no++)
         {
-          block_list[uncertain].off = block_no;
-          block_list[uncertain].len = 1;
-          uncertain++;
-          invalid++;
-          continue;
-        }
+          if (!bi_is_initialised(&block_info[block_no]))
+            continue;
 
-      // first, make all reads valid in quick mode
-      if (st->quick && invalid)
-        continue;
-
-      // ignore fast sectors
-      if (bi_quantile(&block_info[block_no],9,10) < st->fast_lvl)
-        continue;
-
-      // check if a single out-of-ordinary result is not a fluke
-      if (bi_num_samples(&block_info[block_no]) <= 2 &&
-          bi_quantile(&block_info[block_no],9,10) > st->fast_lvl)
-        {
-          block_list[uncertain].off = block_no;
-          block_list[uncertain].len = 1;
-          uncertain++;
-          continue;
-        }
-
-      // big claims need big evidence
-      if (bi_quantile(&block_info[block_no],9,10) >= st->normal_lvl 
-          && bi_num_samples(&block_info[block_no]) < 15)
-        {
-          block_list[uncertain].off = block_no;
-          block_list[uncertain].len = 1;
-          uncertain++;
-          continue;
-        }
-
-      if (bi_quantile(&block_info[block_no],9,10) >= st->slow_lvl 
-          && bi_num_samples(&block_info[block_no]) < 20)
-        {
-          block_list[uncertain].off = block_no;
-          block_list[uncertain].len = 1;
-          uncertain++;
-          continue;
-        }
-
-      // process only sectors with slow sectors
-      if (bi_quantile(&block_info[block_no],9,10) >= st->fast_lvl)
-        {
-          double lq, max;
-          size_t num_samples;
-          num_samples = bi_num_samples(&block_info[block_no]);
-          lq = bi_quantile_exact(&block_info[block_no],1,4);
-          max = bi_max(&block_info[block_no]);
-          if (num_samples == 3)
-            {
-              double low, med, high;
-              low = bi_quantile_exact(&block_info[block_no],0,num_samples);
-              med = bi_quantile_exact(&block_info[block_no],1,num_samples);
-              high = max;
-
-              high = high - st->fast_lvl * floor(high/st->fast_lvl);
-
-              // check if it's not a fluke
-              if ( low < st->fast_lvl && med < st->fast_lvl 
-                  && abs((low+med)/2-high) > st->fast_lvl/4 )
-                continue;
-
-              // if the difference is big, the sector is probably shot, 
-              // check to make sure
-              if ( max > st->normal_lvl)
-                {
-                  block_list[uncertain].off = block_no;
-                  block_list[uncertain].len = 1;
-                  uncertain++;
-                  continue;
-                }
-              else // single re-read only, ignore
-                continue;
-            }
-
-          if (num_samples <= 5)
-            {
-              if (lq > st->fast_lvl)
-                {
-                  // if more than 4 reads show the sector as slower than
-                  // rotational delay, the sector is ceratainly shot
-                  if (certain_bad == 1)
-                    {
-                      block_list[uncertain].off = block_no;
-                      block_list[uncertain].len = 1;
-                      uncertain++;
-                      continue;
-                    }
-                  else
-                    continue;
-                }
-            }
-
-          if (num_samples < 20)
-            {
-              double high,med;
-              high = bi_quantile_exact(&block_info[block_no],num_samples-1,num_samples);
-              med = bi_quantile_exact(&block_info[block_no],num_samples-2,num_samples);
-
-              if ((max - high) < st->fast_lvl/8) // if two slowest are very similar
-                {
-                  if (certain_bad == 1)
-                    {
-                      block_list[uncertain].off = block_no;
-                      block_list[uncertain].len = 1;
-                      uncertain++;
-                      continue;
-                    }
-                  else
-                    continue; // certain bad
-                }
-
-              // if difference is greater than 2 rotational delays more reads are needed
-              if (max/st->fast_lvl - high/st->fast_lvl >= 2 && num_samples < 15)
-                {
-                  block_list[uncertain].off = block_no;
-                  block_list[uncertain].len = 1;
-                  uncertain++;
-                  continue;
-                }
-
-              if (high > st->fast_lvl)
-                {
-                  high = high - st->fast_lvl * floor(high/st->fast_lvl);
-                  max = max - st->fast_lvl * floor(high/st->fast_lvl);
-                  if (abs(high-max) < st->fast_lvl/8)
-                    {
-                      // the reads are not a fluke
-                      if (certain_bad == 1)
-                        {
-                          block_list[uncertain].off = block_no;
-                          block_list[uncertain].len = 1;
-                          uncertain++;
-                          continue;
-                        }
-                      else 
-                        continue;
-                    }
-                  else
-                    {
-                      block_list[uncertain].off = block_no;
-                      block_list[uncertain].len = 1;
-                      uncertain++;
-                      continue;
-                    }
-                }
-
-              if (bi_quantile_exact(&block_info[block_no],num_samples-2
-                    ,num_samples) > st->fast_lvl)
-                {
-                  if (certain_bad == 1)
-                    {
-                      block_list[uncertain].off = block_no;
-                      block_list[uncertain].len = 1;
-                      uncertain++;
-                      continue;
-                    }
-                  else
-                    continue;
-                }
-
-              // looks like only one sample with re-read, don't bother
-              continue;
-            }
-
-          if (num_samples >= 20 && certain_bad == 1)
+          // re-read blocks that didn't receive their share of proper reads
+          if (bi_num_samples(&block_info[block_no]) < min_reads ||
+              !bi_is_valid(&block_info[block_no]))
             {
               block_list[uncertain].off = block_no;
               block_list[uncertain].len = 1;
               uncertain++;
+              invalid++;
               continue;
             }
-          else
-            continue;
         }
     }
+
+  // find uncertain blocks
+  if (!invalid)
+    for (size_t block_no=offset; block_no < block_info_len; block_no++)
+      {
+        if (!bi_is_initialised(&block_info[block_no]))
+          continue;
+
+        // re-read blocks that didn't receive their share of proper reads
+        if (bi_num_samples(&block_info[block_no]) < min_reads ||
+            !bi_is_valid(&block_info[block_no]))
+          {
+            block_list[uncertain].off = block_no;
+            block_list[uncertain].len = 1;
+            uncertain++;
+            continue;
+          }
+
+        // ignore fast sectors
+        if (bi_quantile(&block_info[block_no],9,10) < st->fast_lvl)
+          continue;
+
+        // check if a single out-of-ordinary result is not a fluke
+        if (bi_num_samples(&block_info[block_no]) <= 2 &&
+            bi_quantile(&block_info[block_no],9,10) > st->fast_lvl)
+          {
+            block_list[uncertain].off = block_no;
+            block_list[uncertain].len = 1;
+            uncertain++;
+            continue;
+          }
+
+        // big claims need big evidence
+        if (bi_quantile(&block_info[block_no],9,10) >= st->normal_lvl 
+            && bi_num_samples(&block_info[block_no]) < 15)
+          {
+            block_list[uncertain].off = block_no;
+            block_list[uncertain].len = 1;
+            uncertain++;
+            continue;
+          }
+
+        if (bi_quantile(&block_info[block_no],9,10) >= st->slow_lvl 
+            && bi_num_samples(&block_info[block_no]) < 20)
+          {
+            block_list[uncertain].off = block_no;
+            block_list[uncertain].len = 1;
+            uncertain++;
+            continue;
+          }
+
+        // process only sectors with slow sectors
+        if (bi_quantile(&block_info[block_no],9,10) >= st->fast_lvl)
+          {
+            double lq, max;
+            size_t num_samples;
+            num_samples = bi_num_samples(&block_info[block_no]);
+            lq = bi_quantile_exact(&block_info[block_no],1,4);
+            max = bi_max(&block_info[block_no]);
+            if (num_samples == 3)
+              {
+                double low, med, high;
+                low = bi_quantile_exact(&block_info[block_no],0,num_samples);
+                med = bi_quantile_exact(&block_info[block_no],1,num_samples);
+                high = max;
+
+                high = high - st->fast_lvl * floor(high/st->fast_lvl);
+
+                // check if it's not a fluke
+                if ( low < st->fast_lvl && med < st->fast_lvl 
+                    && abs((low+med)/2-high) > st->fast_lvl/4 )
+                  continue;
+
+                // if the difference is big, the sector is probably shot, 
+                // check to make sure
+                if ( max > st->normal_lvl)
+                  {
+                    block_list[uncertain].off = block_no;
+                    block_list[uncertain].len = 1;
+                    uncertain++;
+                    continue;
+                  }
+                else // single re-read only, ignore
+                  continue;
+              }
+
+            if (num_samples <= 5)
+              {
+                if (lq > st->fast_lvl)
+                  {
+                    // if more than 4 reads show the sector as slower than
+                    // rotational delay, the sector is ceratainly shot
+                    if (certain_bad == 1)
+                      {
+                        block_list[uncertain].off = block_no;
+                        block_list[uncertain].len = 1;
+                        uncertain++;
+                        continue;
+                      }
+                    else
+                      continue;
+                  }
+              }
+
+            if (num_samples < 20)
+              {
+                double high,med;
+                high = bi_quantile_exact(&block_info[block_no],num_samples-1,num_samples);
+                med = bi_quantile_exact(&block_info[block_no],num_samples-2,num_samples);
+
+                if ((max - high) < st->fast_lvl/8) // if two slowest are very similar
+                  {
+                    if (certain_bad == 1)
+                      {
+                        block_list[uncertain].off = block_no;
+                        block_list[uncertain].len = 1;
+                        uncertain++;
+                        continue;
+                      }
+                    else
+                      continue; // certain bad
+                  }
+
+                // if difference is greater than 2 rotational delays more reads are needed
+                if (max/st->fast_lvl - high/st->fast_lvl >= 2 && num_samples < 15)
+                  {
+                    block_list[uncertain].off = block_no;
+                    block_list[uncertain].len = 1;
+                    uncertain++;
+                    continue;
+                  }
+
+                if (high > st->fast_lvl)
+                  {
+                    high = high - st->fast_lvl * floor(high/st->fast_lvl);
+                    max = max - st->fast_lvl * floor(high/st->fast_lvl);
+                    if (abs(high-max) < st->fast_lvl/8)
+                      {
+                        // the reads are not a fluke
+                        if (certain_bad == 1)
+                          {
+                            block_list[uncertain].off = block_no;
+                            block_list[uncertain].len = 1;
+                            uncertain++;
+                            continue;
+                          }
+                        else 
+                          continue;
+                      }
+                    else
+                      {
+                        block_list[uncertain].off = block_no;
+                        block_list[uncertain].len = 1;
+                        uncertain++;
+                        continue;
+                      }
+                  }
+
+                if (bi_quantile_exact(&block_info[block_no],num_samples-2
+                      ,num_samples) > st->fast_lvl)
+                  {
+                    if (certain_bad == 1)
+                      {
+                        block_list[uncertain].off = block_no;
+                        block_list[uncertain].len = 1;
+                        uncertain++;
+                        continue;
+                      }
+                    else
+                      continue;
+                  }
+
+                // looks like only one sample with re-read, don't bother
+                continue;
+              }
+
+            if (num_samples >= 20 && certain_bad == 1)
+              {
+                block_list[uncertain].off = block_no;
+                block_list[uncertain].len = 1;
+                uncertain++;
+                continue;
+              }
+            else
+              continue;
+          }
+      }
 
   if (uncertain == 0)
     {
@@ -1319,7 +1336,7 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
       return NULL;
     }
 
-  // recheck only the worst sectors in quick mode
+  // recheck only the worst sectors in quick mode but all invalid
   if (st->quick && !invalid)
     {
       static int first = 1;
@@ -1329,13 +1346,14 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
         {
           if (uncertain > 1024)
             {
-              // move 1024 worst blocks from the bottom part
+              // move 1024 worst blocks from the bottom 
               size_t from, dest;
-              for (from = uncertain - 1, dest = 1023;
-                  dest >= 0;
-                  from--, dest--);
+              assert(uncertain - 1 > 1023);
+              for (from = uncertain - 1024, dest = 0;
+                  dest < 1024;
+                  from++, dest++)
                 {
-                  block_list[from].off = block_list[dest].off;
+                  block_list[dest].off = block_list[from].off;
                 }
               block_list[1024].off = 0;
               block_list[1024].len = 0;
@@ -1349,11 +1367,12 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
             {
               // move 64 worst blocks up
               size_t from, dest;
-              for (from = uncertain - 1, dest = 63;
-                  dest >= 0;
-                  from--, dest--);
+              assert(uncertain - 1 > 63);
+              for (from = uncertain - 64, dest = 0;
+                  dest < 64;
+                  from++, dest++)
                 {
-                  block_list[from].off = block_list[dest].off;
+                  block_list[dest].off = block_list[from].off;
                 }
               block_list[64].off = 0;
               block_list[64].len = 0;
@@ -1364,6 +1383,7 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
       qsort(block_list, uncertain, sizeof(struct block_list_t), __off_t_compare);
     }
 
+  // check if need to do some globbing
   if (glob == 1)
     return block_list;
 
@@ -2864,28 +2884,30 @@ main(int argc, char **argv)
               double stdev = bi_int_rel_stdev(&block_info[i]);
 
               if (st.verbosity >= 0)
-                printf("block %zi (LBA: %lli-%lli) rel std dev: %3.9f"
-                  ", average: %f, valid: %s, samples: %zi%s\n", 
+                printf("block %zi (LBA: %lli-%lli) rel std dev: %5.2f"
+                  ", avg: %5.2f, valid: %s, samples: %zi, 9th decile: %5.2f%s\n", 
                   i,
                   ((off_t)i)*st.sectors,((off_t)i+1)*st.sectors-1,
                   stdev,
                   bi_average(&block_info[i]),
                   (bi_is_valid(&block_info[i]))?"yes":"no",
                   bi_num_samples(&block_info[i]),
+                  bi_quantile(&block_info[i],9,10),
                   CLEAR_LINE_END);
               /*else
                 printf("%lli\t%lli\n", ((off_t)i)*sectors,
                   ((off_t)i+1)*sectors);*/
 
               if (st.flog != NULL)
-                fprintf(st.flog, "block %zi (LBA: %lli-%lli) rel std dev: %3.9f"
-                  ", average: %f, valid: %s, samples: %zi\n", 
+                fprintf(st.flog, "block %zi (LBA: %lli-%lli) rel std dev: %5.2f"
+                  ", avg: %5.2f, valid: %s, samples: %zi, 9th decile: %5.2f\n", 
                   i,
                   ((off_t)i)*st.sectors,((off_t)i+1)*st.sectors-1,
                   stdev,
                   bi_average(&block_info[i]),
                   (bi_is_valid(&block_info[i]))?"yes":"no",
-                  bi_num_samples(&block_info[i]));
+                  bi_num_samples(&block_info[i]),
+                  bi_quantile(&block_info[i],9,10));
             }
           block_number++;
         }

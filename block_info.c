@@ -45,6 +45,7 @@ bi_clear(struct block_info_t* block_info)
   block_info->samples = NULL;
   block_info->samples_len = 0;
   block_info->valid = 0;
+  block_info->last = 0.0;
 }
 
 /**
@@ -57,6 +58,7 @@ bi_init(struct block_info_t* block_info)
   block_info->samples_len = 0;
   block_info->valid = 0;
   block_info->error = 0;
+  block_info->last = 0;
 }
 
 /**
@@ -64,7 +66,7 @@ bi_init(struct block_info_t* block_info)
 int
 bi_is_initialised(struct block_info_t* block_info)
 {
-  if (block_info->samples != NULL ||
+  if (//block_info->samples != NULL ||
       block_info->samples_len != 0 ||
       block_info->valid != 0 ||
       block_info->error != 0)
@@ -87,6 +89,7 @@ bi_add_time(struct block_info_t* block_info, double time)
 
       block_info->samples[0] = time;
       block_info->samples_len = 1;
+      block_info->last = time;
     }
   else
     {
@@ -98,6 +101,7 @@ bi_add_time(struct block_info_t* block_info, double time)
         err(1, "bi_add_time");
 
       block_info->samples[block_info->samples_len-1] = time;
+      block_info->last = time;
     }
 }
 
@@ -119,6 +123,7 @@ bi_add(struct block_info_t* sum, struct block_info_t* adder)
       memcpy(sum->samples, adder->samples, sizeof(double) * adder->samples_len);
 
       sum->samples_len = adder->samples_len;
+      sum->last = adder->last;
     }
   else
     {
@@ -132,6 +137,7 @@ bi_add(struct block_info_t* sum, struct block_info_t* adder)
         sum->samples[sum->samples_len + i] = adder->samples[i];
 
       sum->samples_len += adder->samples_len;
+      sum->last = adder->last;
     }
 
   sum->error += adder->error;
@@ -169,12 +175,23 @@ void
 bi_remove_last(struct block_info_t* block_info)
 {
   if (block_info->samples_len > 1)
-    block_info->samples_len --;
+    {
+      // switch the last sample places with last sample in the array
+      for (size_t i=0; i< block_info->samples_len; i++)
+        if (block_info->samples[i] == block_info->last)
+          {
+            block_info->samples[i] 
+              = block_info->samples[block_info->samples_len-1];
+            break;
+          }
+      block_info->samples_len --;
+    }
   else
     {
       free(block_info->samples);
       block_info->samples = NULL;
       block_info->samples_len = 0;
+      block_info->last = 0.0;
     }
 }
 
@@ -417,15 +434,21 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
   if (block_info->samples_len == 1)
     return block_info->samples[0];
 
-  // sort samples
-  double *tmp;
+  // save the sorted samples
+  double *tmp = block_info->samples;
+  int sort = 0;
+  for(size_t i=1; i<block_info->samples_len; i++)
+    {
+      if (tmp[i-1] > tmp[i])
+        {
+          sort = 1;
+          break;
+        }
+    }
 
-  tmp = malloc(sizeof(double) * block_info->samples_len);
-  if(!tmp)
-    err(1, "bi_quantile");
-
-  memcpy(tmp, block_info->samples, block_info->samples_len * sizeof(double));
-  qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
+  if (sort)
+    qsort(tmp, 
+      block_info->samples_len, sizeof(double), __double_sort);
 
   // find quantile
   double h;
@@ -435,10 +458,7 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
 
   int h_fl = floor(h);
   
-  double ret = tmp[h_fl] + (h-h_fl)*(tmp[h_fl+1]-tmp[h_fl]);
-  free(tmp);
-
-  return ret;
+  return tmp[h_fl] + (h-h_fl)*(tmp[h_fl+1]-tmp[h_fl]);
 }
 
 /**
