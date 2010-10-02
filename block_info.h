@@ -37,6 +37,7 @@ struct block_info_t {
     unsigned short int error; ///< number of IO errors that occured while reading
                               /// the block
     double last; ///< last sample collected
+    double decile; ///< saved 9th decile
 };
 
 /**
