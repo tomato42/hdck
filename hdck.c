@@ -317,8 +317,6 @@ times_time(struct timespec *res, long long multiplicator)
     {
       tmp_s += tmp_ns / 1000000000LL;
       tmp_ns %= 1000000000LL;
-//      res->tv_nsec -= 1000000000;
-//      res->tv_sec += 1;
     }
 
   res->tv_sec = tmp_s; 
@@ -744,7 +742,6 @@ get_file_stat_sys_name(struct status_t *st, char* filename)
 
   name = strrchr(filename, '/');
   name++; // omit the last '/'
-
   
   if (st->verbosity > 2)
     {
@@ -1729,8 +1726,7 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
         }
 
       // print statistics
-      if (st->verbosity >= 0 ) //&& (block_number % 10 == 0 || blocks_read % 32 == 0 
-//          || blocks_read == total_blocks || blocks_read == 2))
+      if (st->verbosity >= 0 ) 
         {
           clock_gettime(TIMER_TYPE, &end_time);
           diff_time(&res, start_time, end_time);
@@ -1897,7 +1893,6 @@ perform_re_reads(struct status_t *st, int dev_fd, char* dev_stat_path,
       // print statistics before processing
       if (st->verbosity >= 0)
         {
-
           if (min_reads == 1)
             block_list = find_uncertain_blocks(st,
                 block_info, block_info_size, max_std_dev, min_reads, 1, 0, delay,
@@ -1940,7 +1935,6 @@ perform_re_reads(struct status_t *st, int dev_fd, char* dev_stat_path,
                           bi_num_samples(&block_info[i]),
                           CLEAR_LINE_END);
                     }
-
                 }
               block_number++;
             }
@@ -2014,7 +2008,6 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
   ibuf_free = ibuf;
   ibuf = ptr_align(ibuf, pagesize);
 
-
   // position the disk head
   lseek(dev_fd, (off_t)0, SEEK_SET);
   read(dev_fd, ibuf, pagesize);
@@ -2031,8 +2024,6 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
       read_s = read_e;
       write_s = write_e;
       read_sec_s = read_sec_e;
-      //if (dev_stat_path != NULL)
-      //  get_read_writes(dev_stat_path, &read_s, &read_sec_s, &write_s);
       time1.tv_sec=time2.tv_sec;
       time1.tv_nsec=time2.tv_nsec;
 
@@ -2052,8 +2043,6 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
 
       if (dev_stat_path != NULL)
         get_read_writes(dev_stat_path, &read_e, &read_sec_e, &write_e);
-
-//      fprintf(stderr, "read sec: %lli\n", read_sec_e-read_sec_s);
 
       if (nread < 0) // on error
         {
@@ -2144,7 +2133,6 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
                   bi_make_valid(&block_info[blocks]);
                   st->invalid--;
                   add_block_to_stats(st, time_double(res));
-                  //bi_add_time(&block_info[blocks], time_double(res));
 
                   if (st->verbosity > 10)
                     printf("block: %zi, samples: %zi, average: "
@@ -2160,7 +2148,6 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
                 {
                   // subsequent valid or invalid reads
                   add_block(st, &block_info[blocks], time_double(res));
-                  //bi_add_time(&block_info[blocks], time_double(res));
 
                   if (st->verbosity > 10)
                     printf("block: %zi, samples: %zi, average: "
@@ -2195,8 +2182,6 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
         {
           clock_gettime(TIMER_TYPE, &timee);
           diff_time(&res, time1, time2);
-
-//          update_block_stats(st, block_info);
 
           float cur_speed;
           cur_speed = st->sectors * 512 / 1024 * 1.0f / 1024 / 
@@ -2268,6 +2253,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           long long high_dev=0;
           long long sum_invalid=0;
           loop++;
+
           // check standard deviation for blocks
           for (size_t i =0; i < blocks; i++)
             {
@@ -2766,7 +2752,6 @@ main(int argc, char **argv)
 
   st.dev_stat_path = get_file_stat_sys_name(&st, st.filename);
 
-
   fesetround(2); // interger rounding rounds UP
   if (st.max_sectors == 0)
     st.number_of_blocks = lrintl(ceill(st.filesize*1.0L/512/st.sectors));
@@ -2917,9 +2902,6 @@ main(int argc, char **argv)
                   bi_num_samples(&block_info[i]),
                   bi_quantile(&block_info[i],9,10),
                   CLEAR_LINE_END);
-              /*else
-                printf("%lli\t%lli\n", ((off_t)i)*sectors,
-                  ((off_t)i+1)*sectors);*/
 
               if (st.flog != NULL)
                 fprintf(st.flog, "block %zi (LBA: %lli-%lli) rel std dev: %5.2f"
@@ -3260,7 +3242,6 @@ main(int argc, char **argv)
         msec,
         usec);
     }
-
 
   if (st.output != NULL)
     {
