@@ -448,9 +448,10 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
   if (block_info->decile != 0.0 && p == 0.9)
     return block_info->decile;
 
-  // save the sorted samples
+  // save the sorted samples, but sort them only if they are unsorted
   double *tmp = block_info->samples;
-  qsort(tmp, 
+  if (block_info->decile == 0.0)
+    qsort(tmp, 
       block_info->samples_len, sizeof(double), __double_sort);
 
   // find quantile
@@ -458,7 +459,7 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
 
   h = (block_info->samples_len-1)*p+1-1;
 
-  int h_fl = floor(h);
+  size_t h_fl = floor(h);
   
   if (p == 0.9)
     {
@@ -466,7 +467,16 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
       return block_info->decile;
     }
   else
-    return tmp[h_fl] + (h-h_fl)*(tmp[h_fl+1]-tmp[h_fl]);
+    {
+      if (block_info->decile == 0.0)
+        { // save that we sorted the data
+          double k = (block_info->samples_len-1)*0.9+1-1;
+          int k_fl = floor(k);
+          block_info->decile = tmp[k_fl] + (k-k_fl)*(tmp[k_fl+1]-tmp[k_fl]);
+        }
+
+      return tmp[h_fl] + (h-h_fl)*(tmp[h_fl+1]-tmp[h_fl]);
+    }
 }
 
 /**
@@ -484,14 +494,10 @@ bi_quantile_exact(struct block_info_t* block_info, int k, int q)
     return block_info->samples[0];
 
   // sort samples
-  double *tmp;
+  double *tmp = block_info->samples;
 
-  tmp = malloc(sizeof(double) * block_info->samples_len);
-  if(!tmp)
-    err(1, "bi_quantile");
-
-  memcpy(tmp, block_info->samples, block_info->samples_len * sizeof(double));
-  qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
+  if (block_info->decile == 0.0)
+    qsort(tmp, block_info->samples_len, sizeof(double), __double_sort);
 
   // find quantile
   double h;
@@ -505,7 +511,12 @@ bi_quantile_exact(struct block_info_t* block_info, int k, int q)
   
   ret = tmp[h_fl];
 
-  free(tmp);
+  if (block_info->decile == 0.0)
+    { // save that we sorted the data
+      double k = (block_info->samples_len-1)*0.9+1-1;
+      int k_fl = floor(k);
+      block_info->decile = tmp[k_fl] + (k-k_fl)*(tmp[k_fl+1]-tmp[k_fl]);
+    }
   return ret;
 }
 
