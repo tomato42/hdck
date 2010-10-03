@@ -201,7 +201,7 @@ usage(struct status_t *st)
   printf("                    (runs faster, but all partitions must be"
                                                               " unmounted)\n");
   printf("-b, --background    shorthand for --noaffinity, --nortio, --nort\n");
-  printf("-o, --outfile FILE  output file for the detailed statistics \n");
+  printf("-o, --outfile FILE  output file for block level detailed statistics\n");
   printf("-w, --bad-sectors FILE output file for the uncertain sectors\n");
   printf("-r, --read-sectors FILE list of ranges to scan instead of whole disk\n");
   printf("-l, --log FILE      log file to use\n");
@@ -2117,8 +2117,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           // invalidate next read block (to ignore seeking)
           next_is_valid = 0;
 
-          // invalidate last 4 read blocks
-          for(int i=1; blocks-i > 0 && i <= 4 && blocks-i > last_invalid; i++)
+          // invalidate last 8 read blocks
+          for(int i=1; blocks-i > 0 && i <= 8 && blocks-i > last_invalid; i++)
             if (bi_is_valid(&block_info[blocks-i]))
               bi_remove_last(&block_info[blocks-i]);
           
@@ -3166,13 +3166,26 @@ main(int argc, char **argv)
     }
   else if (st.slow != 0)
     {
-      printf("bad\n"
-          "sectors that required more than 2 read attempts "
-          "detected\n");
-      if (st.flog != NULL)
-        fprintf(st.flog, "bad\n"
-            "sectors that required more than 2 read attempts "
-            "detected\n");
+      if (!st.quick || st.exclusive)
+        {
+          printf("bad\n"
+              "sectors that required more than 2 read attempts "
+              "detected\n");
+          if (st.flog != NULL)
+            fprintf(st.flog, "bad\n"
+                "sectors that required more than 2 read attempts "
+                "detected\n");
+        }
+      else
+        {
+          printf("moderate\n"
+              "sectors that required more than 2 read attempts "
+              "detected\n");
+          if (st.flog != NULL)
+            fprintf(st.flog, "moderate\n"
+                "sectors that required more than 2 read attempts "
+                "detected\n");
+        }
     }
   else if (((st.normal * 1.0) / (st.number_of_blocks * 1.0) > 0.001 && !st.quick)
       || ((st.normal * 1.0) / (st.number_of_blocks * 1.0) > 0.25 && st.quick))
