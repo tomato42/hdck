@@ -182,7 +182,7 @@ bi_remove_last(struct block_info_t* block_info)
 {
   if (block_info->samples_len > 1)
     {
-      // switch the last sample places with last sample in the array
+      // swap places of the last sample and last position in the array
       for (size_t i=0; i< block_info->samples_len; i++)
         if (block_info->samples[i] == block_info->last)
           {
@@ -200,9 +200,9 @@ bi_remove_last(struct block_info_t* block_info)
       block_info->samples_len = 0;
       block_info->last = 0.0;
       block_info->decile = 0.0;
+      block_info->valid = 0;
     }
 }
-
 
 /** 
  * check if block_info is valid
@@ -437,13 +437,15 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
 {
   assert(k<=q);
 
+  double p = k*1.0/(q*1.0);
+
   if (block_info->samples_len == 0)
     return NAN;
 
   if (block_info->samples_len == 1)
     return block_info->samples[0];
 
-  if (block_info->decile != 0.0 && k*1.0/(q*1.0) == 0.9)
+  if (block_info->decile != 0.0 && p == 0.9)
     return block_info->decile;
 
   // save the sorted samples
@@ -453,7 +455,6 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
 
   // find quantile
   double h;
-  double p = k*1.0/(q*1.0);
 
   h = (block_info->samples_len-1)*p+1-1;
 

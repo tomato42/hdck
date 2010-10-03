@@ -1712,8 +1712,6 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
                 st->invalid++;
             }
 
-          update_block_stats(st, block_info);
-
           if (st->sector_times == PRINT_SYMBOLS)
             printf("====>");
           // add values from block_data to statistics
@@ -1785,6 +1783,8 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
       else
         {
           correct_reads <<= 1;
+
+          update_block_stats(st, block_info);
         }
 
       // if last reads were unsuccessful, wait a second
@@ -2025,6 +2025,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
     get_read_writes(dev_stat_path, &read_e, &read_sec_e, &write_e);
 
   clock_gettime(TIMER_TYPE, &times);
+  off_t last_invalid = 0;
   while (1)
     {
       read_s = read_e;
@@ -2116,9 +2117,12 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           // invalidate next read block (to ignore seeking)
           next_is_valid = 0;
 
-          // invalidate last read block
-          if (blocks > 0 && bi_is_valid(&block_info[blocks-1]))
-            bi_remove_last(&block_info[blocks-1]);
+          // invalidate last 4 read blocks
+          for(int i=1; blocks-i > 0 && i <= 4 && blocks-i > last_invalid; i++)
+            if (bi_is_valid(&block_info[blocks-i]))
+              bi_remove_last(&block_info[blocks-i]);
+          
+          last_invalid = blocks;
 
           update_block_stats(st, block_info);
         }
