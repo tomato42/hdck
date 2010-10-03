@@ -1207,6 +1207,15 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
               uncertain++;
               continue;
             }
+          
+          if (bi_quantile(&block_info[block_no],9,10) >= st->vslow_lvl
+              && bi_num_samples(&block_info[block_no]) < 30)
+            {
+              block_list[uncertain].off = block_no;
+              block_list[uncertain].len = 1;
+              uncertain++;
+              continue;
+            }
 
           // process only sectors with slow sectors
           if (bi_quantile(&block_info[block_no],9,10) >= st->fast_lvl)
