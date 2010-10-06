@@ -31,6 +31,7 @@
 
 /// information about a single block (256 sectors by default)
 struct block_info_t {
+    char initialized; 
     double* samples; ///< measurements for the block
     size_t samples_len; ///< number of samples taken
     short int valid; ///< 0 if data is invalid (because read was interrupted)

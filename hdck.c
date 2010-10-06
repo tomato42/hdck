@@ -340,11 +340,60 @@ __off_t_compare(const void *a, const void *b)
     return 1;
 }
 
+struct block_info_t *_block_compare_block_info;
+
+static int
+_block_compare(const void *a, const void *b)
+{
+  off_t off_a, off_b;
+  off_a = ((struct block_list_t*)a)->off;
+  off_b = ((struct block_list_t*)b)->off;
+
+  struct block_info_t *x, *y;
+
+  x = &_block_compare_block_info[off_a];
+  y = &_block_compare_block_info[off_b];
+
+  double dec_x, dec_y;
+
+  dec_x = bi_quantile(x, 9, 10);
+  dec_y = bi_quantile(y, 9, 10);
+
+  int val_x, val_y;
+
+  val_x = bi_is_valid(x);
+  val_y = bi_is_valid(y);
+
+  if (val_x == 0 && val_y == 0)
+    return 0;
+  else if (val_x > val_y)
+    return -1;
+  else if (val_x < val_y)
+    return 1;
+  else if (dec_x < dec_y)
+    return -1;
+  else if (dec_x > dec_y)
+    return 1;
+  else // (dec_x == dec_y
+    return 0;
+}
+
+/**
+ * Sort passed block_list based on 9th decile of the samples from
+ * block_info
+ *
+ * @note This function is NOT thread safe!
+ */
 void
 sort_worst_block_list(struct status_t *st, 
     struct block_info_t *block_info, size_t block_info_len, 
     struct block_list_t *block_list, size_t block_list_len)
 {
+  _block_compare_block_info = block_info;
+
+  qsort(block_list, block_list_len, sizeof(struct block_list_t), _block_compare);
+
+  /*
   for (size_t i=0; i<block_list_len; i++)
     {
       for (size_t j=0; j<block_list_len-1; j++)
@@ -365,6 +414,7 @@ sort_worst_block_list(struct status_t *st,
             }
         }
     }
+    */
 }
 
 
@@ -413,7 +463,7 @@ update_block_stats(struct status_t *st, struct block_info_t *block_info)
     {
       if (!bi_is_initialised(&block_info[i]))
         {
-          continue;
+          break;
         }
 
       if (bi_is_valid(&block_info[i]) == 0)
@@ -1158,6 +1208,9 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
   // find uncertain blocks
   if (!invalid && very_slow < 64)
     {
+      double blk_decile;
+      size_t blk_n_sampl;
+
       if (very_slow)
         uncertain = 0; // we don't want duplicates...
       for (size_t block_no=offset; block_no < block_info_len; block_no++)
@@ -1165,8 +1218,10 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
           if (!bi_is_initialised(&block_info[block_no]))
             continue;
 
+          blk_n_sampl = bi_num_samples(&block_info[block_no]);
+
           // re-read blocks that didn't receive their share of proper reads
-          if (bi_num_samples(&block_info[block_no]) < min_reads ||
+          if (blk_n_sampl < min_reads ||
               !bi_is_valid(&block_info[block_no]))
             {
               block_list[uncertain].off = block_no;
@@ -1175,13 +1230,15 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
               continue;
             }
 
+          blk_decile = bi_quantile(&block_info[block_no],9,10);
+
           // ignore fast sectors
-          if (bi_quantile(&block_info[block_no],9,10) < st->fast_lvl)
+          if (blk_decile < st->fast_lvl)
             continue;
 
           // check if a single out-of-ordinary result is not a fluke
-          if (bi_num_samples(&block_info[block_no]) <= 2 &&
-              bi_quantile(&block_info[block_no],9,10) > st->fast_lvl)
+          if (blk_n_sampl <= 2 &&
+              blk_decile > st->fast_lvl)
             {
               block_list[uncertain].off = block_no;
               block_list[uncertain].len = 1;
@@ -1190,8 +1247,8 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
             }
 
           // big claims need big evidence
-          if (bi_quantile(&block_info[block_no],9,10) >= st->normal_lvl 
-              && bi_num_samples(&block_info[block_no]) < 15)
+          if (blk_decile >= st->normal_lvl 
+              && blk_n_sampl < 15)
             {
               block_list[uncertain].off = block_no;
               block_list[uncertain].len = 1;
@@ -1199,8 +1256,8 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
               continue;
             }
 
-          if (bi_quantile(&block_info[block_no],9,10) >= st->slow_lvl 
-              && bi_num_samples(&block_info[block_no]) < 20)
+          if (blk_decile >= st->slow_lvl 
+              && blk_n_sampl < 20)
             {
               block_list[uncertain].off = block_no;
               block_list[uncertain].len = 1;
@@ -1208,8 +1265,8 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
               continue;
             }
           
-          if (bi_quantile(&block_info[block_no],9,10) >= st->vslow_lvl
-              && bi_num_samples(&block_info[block_no]) < 30)
+          if (blk_decile >= st->vslow_lvl
+              && blk_n_sampl < 30)
             {
               block_list[uncertain].off = block_no;
               block_list[uncertain].len = 1;
@@ -1218,11 +1275,11 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
             }
 
           // process only sectors with slow sectors
-          if (bi_quantile(&block_info[block_no],9,10) >= st->fast_lvl)
+          if (blk_decile >= st->fast_lvl)
             {
               double lq, max;
               size_t num_samples;
-              num_samples = bi_num_samples(&block_info[block_no]);
+              num_samples = blk_n_sampl;
               lq = bi_quantile_exact(&block_info[block_no],1,4);
               max = bi_max(&block_info[block_no]);
               if (num_samples == 3)
@@ -1273,10 +1330,13 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
               if (num_samples < 20)
                 {
                   double high,med;
-                  high = bi_quantile_exact(&block_info[block_no],num_samples-1,num_samples);
-                  med = bi_quantile_exact(&block_info[block_no],num_samples-2,num_samples);
+                  high = bi_quantile_exact(
+                      &block_info[block_no],num_samples-1,num_samples);
+                  med = bi_quantile_exact(
+                      &block_info[block_no],num_samples-2,num_samples);
 
-                  if ((max - high) < st->fast_lvl/8) // if two slowest are very similar
+                  if ((max - high) < st->fast_lvl/8) 
+                  // if two slowest are very similar
                     {
                       if (certain_bad == 1)
                         {
@@ -1289,8 +1349,10 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
                         continue; // certain bad
                     }
 
-                  // if difference is greater than 2 rotational delays more reads are needed
-                  if (max/st->fast_lvl - high/st->fast_lvl >= 2 && num_samples < 15)
+                  // if difference is greater than 2 rotational delays 
+                  // more reads are needed
+                  if (max/st->fast_lvl - high/st->fast_lvl >= 2 
+                      && num_samples < 15)
                     {
                       block_list[uncertain].off = block_no;
                       block_list[uncertain].len = 1;
@@ -1789,7 +1851,7 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
         {
           correct_reads <<= 1;
 
-          update_block_stats(st, block_info);
+         // update_block_stats(st, block_info);
         }
 
       // if last reads were unsuccessful, wait a second
@@ -1972,6 +2034,9 @@ perform_re_reads(struct status_t *st, int dev_fd, char* dev_stat_path,
 
       if (block_list)
         free(block_list);
+
+      if (tries % 16 == 0)
+        update_block_stats(st, block_info);
     }
   return;
 }
@@ -2118,11 +2183,20 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           // invalidate last 8 read blocks
           for(int i=1; blocks-i > 0 && i <= 8 && blocks-i > last_invalid; i++)
             if (bi_is_valid(&block_info[blocks-i]))
-              bi_remove_last(&block_info[blocks-i]);
+              {
+                remove_block_from_stats(st, 
+                    bi_quantile(&block_info[blocks-i],9,10));
+                bi_remove_last(&block_info[blocks-i]);
+                if (bi_is_valid(&block_info[blocks-i]))
+                  add_block_to_stats(st, 
+                      bi_quantile(&block_info[blocks-i],9,10));
+                else
+                  st->invalid++;
+              }
           
           last_invalid = blocks;
 
-          update_block_stats(st, block_info);
+          //update_block_stats(st, block_info);
         }
       else // when the read was correct
         {
@@ -2262,6 +2336,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           long long high_dev=0;
           long long sum_invalid=0;
           loop++;
+
+          update_block_stats(st, block_info);
 
           // check standard deviation for blocks
           for (size_t i =0; i < blocks; i++)

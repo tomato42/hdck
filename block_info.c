@@ -61,20 +61,23 @@ bi_init(struct block_info_t* block_info)
   block_info->error = 0;
   block_info->last = 0;
   block_info->decile = 0.0;
+  block_info->initialized = 0;
 }
 
 /**
  */
-int
+inline int
 bi_is_initialised(struct block_info_t* block_info)
 {
-  if (//block_info->samples != NULL ||
+  return block_info->initialized;
+  /*
+  if (block_info->samples != NULL ||
       block_info->samples_len != 0 ||
       block_info->valid != 0 ||
       block_info->error != 0)
     return 1;
   else
-    return 0;
+    return 0;*/
 }
 
 /**
@@ -93,6 +96,7 @@ bi_add_time(struct block_info_t* block_info, double time)
       block_info->samples_len = 1;
       block_info->last = time;
       block_info->decile = time;
+      block_info->initialized = 1;
     }
   else
     {
@@ -106,6 +110,7 @@ bi_add_time(struct block_info_t* block_info, double time)
       block_info->samples[block_info->samples_len-1] = time;
       block_info->last = time;
       block_info->decile = 0.0;
+      block_info->initialized = 1;
     }
 }
 
@@ -146,6 +151,7 @@ bi_add(struct block_info_t* sum, struct block_info_t* adder)
       sum->decile = 0.0;
     }
 
+  sum->initialized &= adder->initialized;
   sum->error += adder->error;
 
   return;
@@ -201,6 +207,7 @@ bi_remove_last(struct block_info_t* block_info)
       block_info->last = 0.0;
       block_info->decile = 0.0;
       block_info->valid = 0;
+      // stll initialized, errors are preserved
     }
 }
 
