@@ -1,3 +1,13 @@
+v 0.4.0 - 2010-10-07
+--------------------
+
+  * change to quantile based detection
+  * fix a bug in with min-reads == max-reads
+  * tweaks to quick mode -- confirm only the 64 worst
+  * fix bug with long options --log, --read-sectors and --bad-sectors not 
+    working
+  * reduced CPU utilisation
+
 v 0.3.0 - 2010-08-25
 --------------------
 
