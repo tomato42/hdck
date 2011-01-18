@@ -366,7 +366,7 @@ bi_sum(struct block_info_t* block_info)
 /** 
  * return number of collected samples
  */
-int
+size_t
 bi_num_samples(struct block_info_t* block_info)
 {
   return block_info->samples_len;

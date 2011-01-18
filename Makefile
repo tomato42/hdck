@@ -1,6 +1,6 @@
 GCC	:= gcc
-CFLAGS  := -O2 -ggdb -Wall -std=c99
-LFLAGS  := -lrt -lm
+CFLAGS  := -O2 -ggdb -Wall -std=c99 `getconf LFS_CFLAGS`
+LFLAGS  := -lrt -lm `getconf LFS_LDFLAGS`
 
 default: hdck
 

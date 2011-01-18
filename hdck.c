@@ -23,7 +23,6 @@
 
 #define _XOPEN_SOURCE 500
 #define _GNU_SOURCE 1
-#define _FILE_OFFSET_BITS 64
 #include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -664,19 +663,19 @@ get_file_size(struct status_t *st, int dev_fd)
       filesize = file_stat.st_size;
       if (st->verbosity > 2)
         {
-          printf("file size: %lli bytes\n", file_stat.st_size);
+          printf("file size: %lli bytes\n", (long long)file_stat.st_size);
         }
       if (st->flog != NULL)
-        fprintf(st->flog, "device size: %lli bytes\n", file_stat.st_size);
+        fprintf(st->flog, "device size: %lli bytes\n", (long long)file_stat.st_size);
     }
   else if (S_ISBLK(file_stat.st_mode))
     {
       if (ioctl(dev_fd, BLKGETSIZE64, &filesize) == -1)
         err(EXIT_FAILURE, "ioctl: BLKGETSIZE64");
       if (st->verbosity > 2)
-        printf("file size: %lli bytes\n", filesize);
+        printf("file size: %lli bytes\n", (long long)filesize);
       if (st->flog != NULL)
-        fprintf(st->flog, "device size: %lli bytes\n", filesize);
+        fprintf(st->flog, "device size: %lli bytes\n", (long long)filesize);
     }
   else
     {
@@ -754,7 +753,7 @@ print_block_list(struct block_list_t* block_list)
 
   while (!(block_list[i].off == 0 && block_list[i].len == 0))
     {
-      printf("%zi: %lli %lli\n", i, block_list[i].off, block_list[i].len);
+      printf("%zi: %lli %lli\n", i, (long long)block_list[i].off, (long long)block_list[i].len);
       i++;
     }
 }
@@ -900,7 +899,7 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
 
   block_info = calloc(sizeof(struct block_info_t), len);
   if (block_info == NULL)
-    err(EXIT_FAILURE, "read_blocks1: len=%lli", len);
+    err(EXIT_FAILURE, "read_blocks1: len=%lli", (long long)len);
 
   buffer = malloc(st->sectors*512+pagesize);
   if (buffer == NULL)
@@ -986,8 +985,8 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
   if ( lseek(fd, (off_t)0, SEEK_CUR) != offset * st->sectors * 512)
     {
       fprintf(stderr, "hdck: read_blocks: wrong offset: got %lli expected %lli\n",
-          lseek(fd, (off_t)0, SEEK_CUR),
-          offset * st->sectors * 512);
+          (long long)lseek(fd, (off_t)0, SEEK_CUR),
+          (long long)offset * st->sectors * 512);
       exit(EXIT_FAILURE);
     }
 
@@ -1601,8 +1600,8 @@ write_list_to_file(struct status_t *st, char* file,
     err(EXIT_FAILURE,"write_list_to_file");
 
   for(size_t i=0; !(block_list[i].off == 0 && block_list[i].len == 0); i++)
-    if(fprintf(handle, "%lli %lli\n", block_list[i].off * st->sectors,
-        (block_list[i].off + block_list[i].len) * st->sectors) == 0)
+    if(fprintf(handle, "%lli %lli\n", block_list[i].off * (long long)st->sectors,
+        (block_list[i].off + block_list[i].len) * (long long)st->sectors) == 0)
       err(EXIT_FAILURE, "write_list_to_file");
 
   fclose(handle);
@@ -2106,8 +2105,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           ((off_t)blocks) * st->sectors * 512 )
         {
           fprintf(stderr, "hdck: main: wrong offset, got %lli expected %lli\n",
-              lseek(dev_fd, (off_t)0, SEEK_CUR),
-              ((off_t)blocks) * st->sectors * 512);
+              (long long)lseek(dev_fd, (off_t)0, SEEK_CUR),
+              ((off_t)blocks) * (long long)st->sectors * 512);
           exit(EXIT_FAILURE);
         }
 
@@ -2154,7 +2153,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
         {
           if (st->verbosity > 0)
             printf("block %zi (LBA: %lli-%lli) interrupted%s\n", blocks,
-               ((off_t)blocks) * st->sectors, ((off_t)blocks+1)*st->sectors-1,
+               ((off_t)blocks) * (long long)st->sectors, 
+               ((off_t)blocks+1)*(long long)st->sectors-1,
                CLEAR_LINE_END);
 
           if (bi_is_initialised(&block_info[blocks]))
@@ -2181,7 +2181,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
           next_is_valid = 0;
 
           // invalidate last 8 read blocks
-          for(int i=1; blocks-i > 0 && i <= 8 && blocks-i > last_invalid; i++)
+          for(int i=1; blocks > i && i <= 8 && blocks > last_invalid + i; i++)
             if (bi_is_valid(&block_info[blocks-i]))
               {
                 remove_block_from_stats(st, 
@@ -2289,14 +2289,14 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
 
           printf("hdck status:%s\n", CLEAR_LINE_END);
           printf("============%s\n", CLEAR_LINE_END);
-          printf("Loop:          %i of %i%s\n", loop+1, st->min_reads, 
+          printf("Loop:          %zi of %zi%s\n", loop+1, st->min_reads, 
               CLEAR_LINE_END);
           printf("Progress:      %.2f%%, %.2f%% total%s\n",
               percent*100, (percent/st->min_reads + loop*1.0/st->min_reads) * 100,
               CLEAR_LINE_END);
           printf("Read:          %lli sectors of %lli%s\n", 
-              ((off_t)blocks)*st->sectors,
-              filesize, CLEAR_LINE_END);
+              ((off_t)blocks)*(long long)st->sectors,
+              (long long)filesize, CLEAR_LINE_END);
           printf("Speed:         %.3fMiB/s, average: %.3fMiB/s%s\n", cur_speed,
               speed, CLEAR_LINE_END);
           printf("Elapsed time:  %02li:%02li:%02li%s\n",
@@ -2708,10 +2708,10 @@ main(int argc, char **argv)
       if(st.max_sectors != 0)
         {
           fprintf(st.flog, "Limiting device size to %lli sectors\n", 
-              st.max_sectors);
+              (long long)st.max_sectors);
         }
       fprintf(st.flog, "Testing device at %s\n", st.filename);
-      fprintf(st.flog, "Assuming %.0frpm disk with %iMiB cache\n", 
+      fprintf(st.flog, "Assuming %.0frpm disk with %ziMiB cache\n", 
           1000/st.rotational_delay*60,
           st.disk_cache_size);
       fprintf(st.flog, "Block thresholds: %.2f, %.2f, %.2f, %.2f, %.2f, %.2f, "
@@ -2824,7 +2824,7 @@ main(int argc, char **argv)
   if (!st.filesize)
     {
       fprintf(stderr, "Device too small, needs to be at least %lli bytes in "
-          "size\n", ((off_t)512)*st.sectors);
+          "size\n", ((off_t)512)*(long long)st.sectors);
       exit(EXIT_FAILURE);
     }
 
@@ -2847,7 +2847,7 @@ main(int argc, char **argv)
   if (!block_info)
     {
       fprintf(stderr, "Allocation error, tried to allocate %lli bytes:", 
-          st.number_of_blocks * sizeof(struct block_info_t));
+          (long long)st.number_of_blocks * sizeof(struct block_info_t));
       err(EXIT_FAILURE, "calloc");
     }
 
@@ -2980,7 +2980,8 @@ main(int argc, char **argv)
                 printf("block %zi (LBA: %lli-%lli) rel std dev: %5.2f"
                   ", avg: %5.2f, valid: %s, samples: %zi, 9th decile: %5.2f%s\n", 
                   i,
-                  ((off_t)i)*st.sectors,((off_t)i+1)*st.sectors-1,
+                  ((off_t)i)*(long long)st.sectors,
+                  ((off_t)i+1)*(long long)st.sectors-1,
                   stdev,
                   bi_average(&block_info[i]),
                   (bi_is_valid(&block_info[i]))?"yes":"no",
@@ -2992,7 +2993,8 @@ main(int argc, char **argv)
                 fprintf(st.flog, "block %zi (LBA: %lli-%lli) rel std dev: %5.2f"
                   ", avg: %5.2f, valid: %s, samples: %zi, 9th decile: %5.2f\n", 
                   i,
-                  ((off_t)i)*st.sectors,((off_t)i+1)*st.sectors-1,
+                  ((off_t)i)*(long long)st.sectors,
+                  ((off_t)i+1)*(long long)st.sectors-1,
                   stdev,
                   bi_average(&block_info[i]),
                   (bi_is_valid(&block_info[i]))?"yes":"no",
@@ -3066,10 +3068,10 @@ main(int argc, char **argv)
 
   if (st.verbosity >= 0)
     printf("tested %lli blocks (%lli errors, %lli samples)%s\n", 
-        st.number_of_blocks, st.errors, reads, CLEAR_LINE_END);
+        (long long)st.number_of_blocks, st.errors, reads, CLEAR_LINE_END);
   if (st.flog != NULL)
     fprintf(st.flog, "tested %lli blocks (%lli errors, %lli samples)\n", 
-        st.number_of_blocks, st.errors, reads);
+        (long long)st.number_of_blocks, st.errors, reads);
 
   sum = bi_average(&single_block);
 
