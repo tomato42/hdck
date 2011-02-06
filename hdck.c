@@ -44,6 +44,7 @@
 #include <stdint.h>
 #include "ioprio.h"
 #include "block_info.h"
+#include "sg_cmds_extra.h"
 #define TIMER_TYPE CLOCK_REALTIME 
 #ifdef __GNUC__
 #define PURE_FUNCTION  __attribute__ ((pure))
@@ -81,6 +82,7 @@ struct status_t {
     int sector_times;  /**< how to display individual block times */
     int quick; /**< quick mode */
     int usb_mode; /**< disk is behind USB bridge */
+    int ata_verify; /**< use ATA VERIFY to test disk */
     /*
      * device access modes and device parameters
      */
@@ -226,6 +228,10 @@ usage(struct status_t *st)
   printf("--disk-rpm NUM      disk RPM (7200 by default)\n");
   printf("--noverbose         reduce verbosity\n");
   printf("--no-usb            not testing over USB bridge\n");
+  printf("--ata-verify        use ATA VERIFY command to reduce bandwidth"
+      " utilisation\n");
+  printf("                    (for use with USB and FireWire disks)\n");
+  printf("--no-ata-verify     don\'t use ATA VERIFY command (default)\n");
   printf("-v, --verbose       be more verbose\n");
   printf("--version           write version information\n");
   printf("-h, -?              print this message\n");
@@ -253,7 +259,7 @@ usage(struct status_t *st)
   printf("64 worst blocks\n");
   printf("\n");
   printf("Format for the -o option is presented in the first line of file. "
-      "Block is \n\n");
+      "Block is\n");
   printf("a group of %zi sectors (%zi bytes). Consecutive lines in files for "
       "-r and\n", st->sectors, st->sectors * 512);
   printf("-w are ranges of LBAs to scan.\n");
@@ -894,6 +900,8 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
   char* buffer_free;
   off_t nread;
   off_t no_blocks = 0;
+  unsigned int info;
+  int int_res = 0;
 
   assert(len>0);
 
@@ -918,15 +926,31 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
     disk_cache = 16;
   else
     disk_cache = 1;
+
+  off_t beggining_pos = ((offset-disk_cache-1)*st->sectors>=0)?
+                          (offset-disk_cache-1)*st->sectors:0;
     
-  if(lseek(fd, ((offset-disk_cache-1)*st->sectors*512>=0)?
-                (offset-disk_cache-1)*st->sectors*512:
-                0, SEEK_SET) < 0)
+  if(lseek(fd, beggining_pos*512, SEEK_SET) < 0)
     goto interrupted;
 
   for (size_t i=0; i < disk_cache; i++)
     {
-      nread = read(fd, buffer, st->sectors*512);
+
+      if (!st->ata_verify)
+        nread = read(fd, buffer, st->sectors*512);
+      else
+        {
+          int_res = sg_ll_verify10(fd, 0, 0, 0, 
+              (unsigned int)beggining_pos+i*st->sectors,
+              st->sectors, NULL, 0, &info, 1, st->verbosity);
+          if (int_res != 0)
+            {
+              errno = EIO;
+              nread = -1;
+            }
+          else
+            nread = st->sectors*512;
+        }
 
       if (nread < 0)
         {
@@ -955,7 +979,22 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
     if ( lseek(fd, (offset-1>=0)?(offset-1)*st->sectors*512:0, SEEK_SET) < 0)
       goto interrupted;
 
-  nread = read(fd, buffer, st->sectors*512);
+  if (!st->ata_verify)
+    nread = read(fd, buffer, st->sectors*512);
+  else
+    {
+      int_res = sg_ll_verify10(fd, 0, 0, 0, (unsigned int)(offset-1>=0)?
+          (offset-1)*st->sectors:0,
+          st->sectors, NULL, 0, &info, 1, st->verbosity);
+      if (int_res != 0)
+        {
+          errno = EIO;
+          nread = -1;
+        }
+      else
+        nread = st->sectors*512;
+    }
+
   if (nread < 0)
     {
       fprintf(stderr, "E");
@@ -982,7 +1021,7 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
       goto interrupted;
 
   // check if current position is correct (assert)
-  if ( lseek(fd, (off_t)0, SEEK_CUR) != offset * st->sectors * 512)
+  if ( !st->ata_verify && lseek(fd, (off_t)0, SEEK_CUR) != offset * st->sectors * 512)
     {
       fprintf(stderr, "hdck: read_blocks: wrong offset: got %lli expected %lli\n",
           (long long)lseek(fd, (off_t)0, SEEK_CUR),
@@ -998,7 +1037,21 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
       time_start.tv_sec = time_end.tv_sec;
       time_start.tv_nsec = time_end.tv_nsec;
 
-      nread = read(fd, buffer, st->sectors*512);
+      if (!st->ata_verify)
+        nread = read(fd, buffer, st->sectors*512);
+      else
+        {
+          int_res = sg_ll_verify10(fd, 0, 0, 0, 
+              (unsigned int)offset*st->sectors+no_blocks*st->sectors,
+              st->sectors, NULL, 0, &info, 1, st->verbosity);
+          if (int_res != 0)
+            {
+              errno = EIO;
+              nread = -1;
+            }
+          else
+            nread = st->sectors*512;
+        }
 
       clock_gettime(TIMER_TYPE, &time_end);
 
@@ -1053,18 +1106,55 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
 
   // read additional two blocks to exclude the probability that there were 
   // unfinished reads or writes in the mean time while the main was run
-  nread = read(fd, buffer, st->sectors*512);
-  nread = read(fd, buffer, st->sectors*512);
+  if (!st->ata_verify)
+    nread = read(fd, buffer, st->sectors*512);
+  else
+    {
+      int_res = sg_ll_verify10(fd, 0, 0, 0, 
+          (unsigned int)st->sectors*(offset+no_blocks+1),
+          st->sectors, NULL, 0, &info, 1, st->verbosity);
+      if (int_res != 0)
+        {
+          errno = EIO;
+          nread = -1;
+        }
+      else
+        nread = st->sectors*512;
+    }
+  if (!st->ata_verify)
+    nread = read(fd, buffer, st->sectors*512);
+  else
+    {
+      int_res = sg_ll_verify10(fd, 0, 0, 0, 
+          (unsigned int)st->sectors*(offset+no_blocks+2),
+          st->sectors, NULL, 0, &info, 1, st->verbosity);
+      if (int_res != 0)
+        {
+          errno = EIO;
+          nread = -1;
+        }
+      else
+        nread = st->sectors*512;
+    }
 
   if (stat_path != NULL)
     get_read_writes(stat_path, &read_end, &read_sectors_e, &write_end);
 
-  if (((read_end-read_start != disk_cache + 1 + 2 + len && 
+  if (((!st->ata_verify && read_end-read_start != disk_cache + 1 + 2 + len && 
+        st->nodirect == 0 && 
+        stat_path != NULL
+      )||
+      (st->ata_verify && read_end-read_start != 0 && 
         st->nodirect == 0 && 
         stat_path != NULL
       )
       || 
-      (read_end-read_start > 4 * (disk_cache + 1 + 2 + len) && 
+      (!st->ata_verify && read_end-read_start > 4 * (disk_cache + 1 + 2 + len) && 
+       st->nodirect == 1 && 
+        stat_path != NULL
+      )
+      ||
+      (st->ata_verify && read_end-read_start != 0 && 
        st->nodirect == 1 && 
         stat_path != NULL
       ))
@@ -1639,7 +1729,7 @@ read_list_from_file(struct status_t *st, char* file)
         }
       assert(alloc_elements >= read_blocks);
 
-      re = fscanf(handle, "%lli %lli\n", &off, &len);
+      re = fscanf(handle, "%lli %lli\n", (long long *)&off, (long long *)&len);
       if (re == 0 || re < 0)
         break;
 
@@ -1688,6 +1778,8 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
   struct timespec start_time, end_time, res; ///< expected time calculation
   size_t block_number=0; ///< position in the block_list
   struct block_info_t* block_data; ///< stats for sectors read
+  int int_res;
+  unsigned int info;
 
   if (st->verbosity > 6)
     print_block_list(block_list);
@@ -1707,22 +1799,33 @@ read_block_list(struct status_t *st, int dev_fd, struct block_list_t* block_list
   // but only when reads by themselves won't do it
   if (total_blocks <= disk_cache *2)
     {
-      if(lseek(dev_fd, 0, SEEK_SET) < 0)
-        err(1,"read_block_list:can't seek");
-
-      char *buffer, *buffer_free;
-      buffer = malloc(st->sectors*512+pagesize);
-      if (buffer == NULL)
-        err(EXIT_FAILURE, "read_block_list");
-      buffer_free = buffer;
-      buffer = ptr_align(buffer, pagesize);
-      for (size_t i=0; i < disk_cache*2; i++)
+      if(st->ata_verify)
         {
-          int nread;
-          nread = read(dev_fd, buffer, st->sectors*512);
-          //XXX ignore errors
+          int_res = sg_ll_verify10(dev_fd, 0, 0, 0, 
+              (unsigned int)0, st->sectors*disk_cache*2, NULL, 0, &info, 1, st->verbosity);
+          // XXX ignore errors
+          if(lseek(dev_fd, st->sectors*disk_cache*2*512, SEEK_SET) < 0)
+            err(1,"read_block_list:can't seek");
         }
-      free(buffer_free);
+      else
+        {
+          if(lseek(dev_fd, 0, SEEK_SET) < 0)
+            err(1,"read_block_list:can't seek");
+
+          char *buffer, *buffer_free;
+          buffer = malloc(st->sectors*512+pagesize);
+          if (buffer == NULL)
+            err(EXIT_FAILURE, "read_block_list");
+          buffer_free = buffer;
+          buffer = ptr_align(buffer, pagesize);
+          for (size_t i=0; i < disk_cache*2; i++)
+            {
+              int nread;
+              nread = read(dev_fd, buffer, st->sectors*512);
+              //XXX ignore errors
+            }
+          free(buffer_free);
+        }
     }
 
   clock_gettime(TIMER_TYPE, &start_time);
@@ -2067,6 +2170,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
   size_t loop=0; ///< loop number
   struct timespec time1, time2, /**< time it takes to read single block */
                   res; /**< temp result */
+  int int_res;
   off_t nread; ///< number of bytes the read() managed to read
   size_t blocks = 0; ///< number of blocks read in this run
   long long abs_blocks = 0; ///< number of blocks read in all runs
@@ -2092,6 +2196,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
 
   clock_gettime(TIMER_TYPE, &times);
   off_t last_invalid = 0;
+  unsigned int info = 0;
   while (1)
     {
       read_s = read_e;
@@ -2101,7 +2206,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
       time1.tv_nsec=time2.tv_nsec;
 
       // assertion
-      if (lseek(dev_fd, (off_t)0, SEEK_CUR) != 
+      if (!st->ata_verify && 
+          lseek(dev_fd, (off_t)0, SEEK_CUR) != 
           ((off_t)blocks) * st->sectors * 512 )
         {
           fprintf(stderr, "hdck: main: wrong offset, got %lli expected %lli\n",
@@ -2111,7 +2217,23 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
         }
 
       //clock_gettime(TIMER_TYPE, &time1);
-      nread = read(dev_fd, ibuf, st->sectors*512);
+      if (!st->ata_verify)
+        nread = read(dev_fd, ibuf, st->sectors*512);
+      else
+        {
+          int_res = sg_ll_verify10(dev_fd, 0, 0, 0, (unsigned int)(blocks * st->sectors),
+                 st->sectors, NULL, 0, &info, 1, st->verbosity);
+
+          if (int_res != 0)
+            {
+              errno = EIO;
+              nread = -1;
+            }
+          else
+            nread = st->sectors*512;
+        
+        }
+
       clock_gettime(TIMER_TYPE, &time2);
 
       if (dev_stat_path != NULL)
@@ -2145,9 +2267,13 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
         }
       // when the read was incomplete or interrupted
       else if (nread != st->sectors*512 || 
-          (read_e-read_s != 1 && st->nodirect == 0 && dev_stat_path != NULL) || 
-          (read_e-read_s > 4 && st->nodirect == 1 && dev_stat_path != NULL) || 
-          (read_sec_e-read_sec_s != st->sectors && 
+          (st->ata_verify && read_e-read_s != 0 && st->nodirect == 0 && dev_stat_path != NULL) || 
+          (!st->ata_verify && read_e-read_s != 1 && st->nodirect == 0 && dev_stat_path != NULL) || 
+          (st->ata_verify && read_e-read_s != 0 && st->nodirect == 1 && dev_stat_path != NULL) || 
+          (!st->ata_verify && read_e-read_s > 4 && st->nodirect == 1 && dev_stat_path != NULL) || 
+          (st->ata_verify && read_sec_e-read_sec_s != 0 && 
+                st->nodirect == 0 && dev_stat_path != NULL) || 
+          (!st->ata_verify && read_sec_e-read_sec_s != st->sectors && 
                 st->nodirect == 0 && dev_stat_path != NULL) || 
           (write_e != write_s && dev_stat_path != NULL))
         {
@@ -2367,10 +2493,14 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
                 {
                   nread = -1; // exit loop, end of device
                 }
-              nread = read(dev_fd, ibuf, 512);
-              if (lseek(dev_fd, (off_t)0, SEEK_SET) < 0)
+              // try to place first sector in cache
+              if (!st->ata_verify)
                 {
-                  nread = -1; // exit loop, end of device
+                  nread = read(dev_fd, ibuf, 512);
+                  if (lseek(dev_fd, (off_t)0, SEEK_SET) < 0)
+                    {
+                      nread = -1; // exit loop, end of device
+                    }
                 }
               clock_gettime(TIMER_TYPE, &time2);
               // TODO: flush system buffers when no direct 
@@ -2418,6 +2548,7 @@ main(int argc, char **argv)
   st.max_std_dev = 0.0;
   st.sector_times = 0;
   st.usb_mode = 1;
+  st.ata_verify = 0;
   st.disk_cache_size = 32; // in MiB
   st.rotational_delay = 60.0/7200*1000; // in ms
   st.filename = NULL;
@@ -2498,6 +2629,8 @@ main(int argc, char **argv)
         {"log", 1, 0, 'l'}, // 23
         {"quick", 0, &st.quick, 1}, // 24
         {"no-usb", 0, 0, 0}, // 25
+        {"ata-verify", 0, 0, 0}, // 26
+        {"no-ata-verify", 0, 0, 0}, // 27
         {0, 0, 0, 0}
     };
 
@@ -2563,6 +2696,16 @@ main(int argc, char **argv)
         if (option_index == 25)
           {
             st.usb_mode = 0;
+            break;
+          }
+        if (option_index == 26)
+          {
+            st.ata_verify = 1;
+            break;
+          }
+        if (option_index == 27)
+          {
+            st.ata_verify = 0;
             break;
           }
         break;
