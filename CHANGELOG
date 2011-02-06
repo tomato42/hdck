@@ -1,3 +1,10 @@
+v 0.5.0 - 2011-02-06
+--------------------
+
+  * add support for ATA VERIFY command to allow testing drives over USB, 
+    FireWire and behind SAS backplanes
+  * fix crash with specific sized drives
+
 v 0.4.0 - 2010-10-07
 --------------------
 

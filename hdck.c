@@ -59,7 +59,7 @@ const struct version_t {
     const int major;
     const int minor;
     const int revision;
-} version = {0, 4, 0};
+} version = {0, 5, 0};
 
 /** structure representing program status */
 struct status_t {
