@@ -5,7 +5,7 @@ LFLAGS  := -lrt -lm `getconf LFS_LDFLAGS`
 default: hdck
 
 hdck: block_info.o hdck.c sg-verify/sg_cmds_extra.o
-	$(GCC) $(CFLAGS) $(LFLAGS) -Isg-verify -Lsg-verify -o hdck hdck.c block_info.o sg-verify/*.o
+	$(GCC) $(CFLAGS) -Isg-verify -Lsg-verify -o hdck hdck.c block_info.o sg-verify/*.o $(LFLAGS) 
 
 block_info.o: block_info.c block_info.h
 	$(GCC) -c $(CFLAGS)  block_info.c -o block_info.o
