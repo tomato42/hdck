@@ -127,6 +127,95 @@ Disk status can range from:
 Basically any disk at very bad or worse requires administrator action (more on
 this later), lower levels can be considered as OK.
 
+# Nomenclature
+
+## scan status
+
+When the scan is running, the status look similar to this:
+
+```
+hdck status:
+============
+Loop:          1 of 1
+Progress:      2.87%, 2.87% total
+Read:          56064000 sectors of 1000204795904
+Speed:         121.408MiB/s, average: 94.588MiB/s
+Elapsed time:  00:04:49
+Expected time: 02:47:50
+         Samples:             Blocks (9th decile):
+< 2.1ms:               190880               190788
+< 4.2ms:                26886                26877
+< 8.3ms:                   13                   13
+<16.7ms:                  661                  642
+<33.3ms:                  130                  113
+<50.0ms:                  201                   28
+>50.0ms:                   26                  175
+ERR    :                    0                    0
+Intrrpt:                  203                  364
+```
+
+* `Loop` - the current and programmed total number of whole-disk reads that the
+  application will perform
+* `Progress` - what percentage of the current read has been performed and how
+  much is that in light of the total number of expected reads
+* `Read` - current sector number (LBA) being read and the total number of
+  sectors on the device
+* `Speed` - current and average speed of reading the device
+* `Elapsed time` - how long has the `hdck` been running, in hours, minutes and
+  seconds
+* `Expected time` - what is the expected total runtime of the application, in
+  hours, minutes and seconds
+* `Samples` - total number of blocks with a given property
+* `Blocks` - total number of blocks for which the calculated (or estimated)
+  [ninth decile](https://en.wikipedia.org/wiki/Quantile) places them in a
+  given category
+* `2.1ms`, `4.2ms`, etc. - the amount of time it took the hard drive to
+  read the sector (the exact numbers depend on rotational speed of the
+  hard drive, the numbers are equal to rotational delay divided by 4, by 2,
+  multiplied by 1, 2, 4 and 6 respectively)
+* `ERR` - sectors for which an IO error was returned (the read failed
+  completely)
+* `Intrrpt` - reads which were interrupted - when `hdck` detected that other
+  process was accessing the drive, they will be ignored and sectors will
+  be re-read
+
+## Scan report
+The most important part of the scan is the list of the worst blocks:
+
+```
+Worst blocks:
+block no      st.dev  avg   1stQ    med     3rdQ   valid samples 9th decile
+        7390  6.6420   4.84    1.01    1.01    6.76  yes   3     10.21
+        6821  5.2559   6.81    4.80    8.75    9.78  yes   3     10.40
+       19616  6.9332   4.99    0.99    0.99    7.00  yes   3     10.60
+       18108  6.9555   4.98    0.96    0.98    7.00  yes   3     10.60
+       25216  5.9841   6.12    2.67    2.67    7.85  yes   3     10.96
+       29680  5.2407   5.08    0.97    0.97    9.56  yes  12     12.66
+        1912  5.3093   4.41    0.98    1.02    7.49  yes  15     12.92
+       30218  8.2052   6.03    2.11    2.64    6.56  yes   4     13.58
+        2471  6.0064   7.13    2.70    2.71   14.69  yes  11     14.70
+       24895 11.3644   7.34    0.78    0.98   10.72  yes   3     16.57
+```
+(note, the list is sorted in reverse order - worst last - to ensure that the
+most important info is shown even on 80x25 rescue terminals)
+
+Here, the explanation for columns is as follows:
+
+* `block no` - block number (multiply by 256 to get LBA of first sector)
+* `st.dev` - standard deviation of all the samples for the block
+* `avg` - average (arithmetic mean) of oll the samples
+* `1stQ` - first quartile - no more than 25% of the block reads took this much
+  time (in ms)
+* `med` - median - no more than 50% of the block reads took this much time (in
+  ms)
+* `3rdQ` - third quartile - no more than 75% of reads took this much time (in
+  ms)
+* `valid` - is the statistic valid; for sectors near bad blocks (IO errors)
+  the collection may be not possible
+* `samples` - number of times the block was read
+* `9th decile` - no more than 90% of reads took this much time to complete (in
+  ms)
+
 
 # Use notes
 ## What not to do
@@ -167,3 +256,7 @@ mount -o remount,noatime /
 # Advanced usage
 
 TODO
+
+# Thanks
+
+* Dmitry Postrigan for MHDD, the main source of inspiration for `hdck`
