@@ -1,5 +1,5 @@
-/** hdck - hard drive low-level error and badsector checking 
- * 
+/** hdck - hard drive low-level error and badsector checking
+ *
  * Copyright (C) 2010  Hubert Kario
  *
  * This program is free software: you can redistribute it and/or modify

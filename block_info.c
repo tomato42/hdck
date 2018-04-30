@@ -1,5 +1,5 @@
-/** hdck - hard drive low-level error and badsector checking 
- * 
+/** hdck - hard drive low-level error and badsector checking
+ *
  * Copyright (C) 2010  Hubert Kario
  *
  * This program is free software: you can redistribute it and/or modify
@@ -15,7 +15,7 @@
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>
  *
- * uses parts of code from GNU dd 
+ * uses parts of code from GNU dd
  * Copyright (C) 2002-9 Bruce Allen <smartmontools-support@lists.sourceforge.net>
  * Copyright (C) 2008-9 Christian Franke <smartmontools-support@lists.sourceforge.net>
  * Copyright (C) 2000 Michael Cornwell <cornwell@acm.org>
@@ -50,7 +50,7 @@ bi_clear(struct block_info_t* block_info)
 }
 
 /**
- * initalises the block_info_t struct
+ * initialises the block_info_t struct
  */
 void
 bi_init(struct block_info_t* block_info)
@@ -101,7 +101,7 @@ bi_add_time(struct block_info_t* block_info, double time)
   else
     {
       block_info->samples_len++;
-      block_info->samples = realloc(block_info->samples, 
+      block_info->samples = realloc(block_info->samples,
           sizeof(double) * block_info->samples_len);
 
       if (!block_info->samples)
@@ -114,8 +114,8 @@ bi_add_time(struct block_info_t* block_info, double time)
     }
 }
 
-/** 
- * add another block_info 
+/**
+ * add another block_info
  */
 void
 bi_add(struct block_info_t* sum, struct block_info_t* adder)
@@ -157,13 +157,13 @@ bi_add(struct block_info_t* sum, struct block_info_t* adder)
   return;
 }
 
-/** 
+/**
  * add one block_info to another, only if their state matches
  */
 void
 bi_add_valid(struct block_info_t* sum, struct block_info_t* adder)
 {
-  if ((sum->valid == 1 && adder->valid == 1) || 
+  if ((sum->valid == 1 && adder->valid == 1) ||
       ((sum->valid != 1) && (adder->valid != 1)))
     {
       bi_add(sum, adder);
@@ -180,7 +180,7 @@ bi_add_valid(struct block_info_t* sum, struct block_info_t* adder)
     }
 }
 
-/** 
+/**
  * removes last sample
  */
 void
@@ -192,7 +192,7 @@ bi_remove_last(struct block_info_t* block_info)
       for (size_t i=0; i< block_info->samples_len; i++)
         if (block_info->samples[i] == block_info->last)
           {
-            block_info->samples[i] 
+            block_info->samples[i]
               = block_info->samples[block_info->samples_len-1];
             break;
           }
@@ -207,11 +207,11 @@ bi_remove_last(struct block_info_t* block_info)
       block_info->last = 0.0;
       block_info->decile = 0.0;
       block_info->valid = 0;
-      // stll initialized, errors are preserved
+      // still initialized, errors are preserved
     }
 }
 
-/** 
+/**
  * check if block_info is valid
  */
 int
@@ -220,7 +220,7 @@ bi_is_valid(struct block_info_t* block_info)
   return block_info->valid;
 }
 
-/** 
+/**
  * set block info to be valid
  */
 void
@@ -229,7 +229,7 @@ bi_make_valid(struct block_info_t* block_info)
   block_info->valid = 1;
 }
 
-/** 
+/**
  * set block info to be invalid
  */
 void
@@ -238,7 +238,7 @@ bi_make_invalid(struct block_info_t* block_info)
   block_info->valid = 0;
 }
 
-/** 
+/**
  * returns individual sample times
  * DO NOT free returned data, DO NOT modify returned data
  */
@@ -248,7 +248,7 @@ bi_get_times(struct block_info_t* block_info)
   return block_info->samples;
 }
 
-/** 
+/**
  * return standard deviation for samples
  */
 double
@@ -264,9 +264,9 @@ bi_stdev(struct block_info_t* block_info)
       n++;
       delta = block_info->samples[i] - mean;
       mean += delta/n;
-      M2 += delta * (block_info->samples[i] - mean); 
+      M2 += delta * (block_info->samples[i] - mean);
     }
-  
+
   return sqrt(M2 / (n - 1));
 }
 
@@ -330,12 +330,12 @@ bi_rel_stdev(struct block_info_t* block_info)
       M2 += delta * (block_info->samples[i] - mean);
       sum += block_info->samples[i];
     }
-  
+
   return (sqrt(M2 / (n - 1))) / (sum / n);
 }
 
-/** 
- * return arithemtic average for samples
+/**
+ * return arithmetic average for samples
  */
 double
 bi_average(struct block_info_t* block_info)
@@ -363,7 +363,7 @@ bi_sum(struct block_info_t* block_info)
   return sum;
 }
 
-/** 
+/**
  * return number of collected samples
  */
 size_t
@@ -390,7 +390,7 @@ __double_sort(const void* a, const void* b)
     return 1;
 }
 
-/** 
+/**
  * return truncated average for samples
  * @parm percent how much data is to be thrown off
  */
@@ -412,7 +412,8 @@ bi_trunc_average(struct block_info_t* block_info, double percent)
   size_t low, high;
 
   low = ceill(percent / 2 * block_info->samples_len);
-  high = floorl(block_info->samples_len - percent / 2 * block_info->samples_len);
+  high = floorl(block_info->samples_len - percent / 2 *
+    block_info->samples_len);
 
   if (high == low)
     {
@@ -435,7 +436,7 @@ bi_trunc_average(struct block_info_t* block_info, double percent)
 
 /**
  * return k-th quantile of q order using interpolating algorithm
- * @parm block_info block data to analise
+ * @parm block_info block data to analyse
  * @parm k ordinal of quantile to return (q/2 for median)
  * @parm q order of quantiles (4 for quartiles, 10 for deciles)
  */
@@ -458,7 +459,7 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
   // save the sorted samples, but sort them only if they are unsorted
   double *tmp = block_info->samples;
   if (block_info->decile == 0.0)
-    qsort(tmp, 
+    qsort(tmp,
       block_info->samples_len, sizeof(double), __double_sort);
 
   // find quantile
@@ -467,7 +468,7 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
   h = (block_info->samples_len-1)*p+1-1;
 
   size_t h_fl = floor(h);
-  
+
   if (p == 0.9)
     {
       block_info->decile = tmp[h_fl] + (h-h_fl)*(tmp[h_fl+1]-tmp[h_fl]);
@@ -488,7 +489,7 @@ bi_quantile(struct block_info_t* block_info, int k, int q)
 
 /**
  * return k-th quantile of q order using exact algorithm
- * @parm block_info block data to analise
+ * @parm block_info block data to analyse
  * @parm k ordinal of quantile to return (q/2 for median)
  * @parm q order of quantiles (4 for quartiles, 10 for deciles)
  */
@@ -515,7 +516,7 @@ bi_quantile_exact(struct block_info_t* block_info, int k, int q)
 
   int h_fl = nearbyint(h)-1;
   if (h_fl < 0) h_fl = 0;
-  
+
   ret = tmp[h_fl];
 
   if (block_info->decile == 0.0)
@@ -527,7 +528,7 @@ bi_quantile_exact(struct block_info_t* block_info, int k, int q)
   return ret;
 }
 
-/** 
+/**
  * return inteligent mean for samples
  */
 double
@@ -543,7 +544,7 @@ bi_int_average(struct block_info_t* block_info)
     }
 }
 
-/** 
+/**
  * return truncated standard deviation for samples
  * @param percent how much data is to be thrown off
  */
@@ -583,16 +584,16 @@ bi_trunc_stdev(struct block_info_t* block_info, double percent)
       n++;
       delta = tmp[i] - mean;
       mean += delta/n;
-      M2 += delta * (tmp[i] - mean); 
+      M2 += delta * (tmp[i] - mean);
     }
 
   free(tmp);
-  
+
   return sqrt(M2 / (n - 1));
 }
 
-/** 
- * return truncated relative standard deviation (stdev/mean) for samples 
+/**
+ * return truncated relative standard deviation (stdev/mean) for samples
  * @param percent how much data is to be thrown off
  */
 double
@@ -632,16 +633,16 @@ bi_trunc_rel_stdev(struct block_info_t* block_info, double percent)
       n++;
       delta = tmp[i] - mean;
       mean += delta/n;
-      M2 += delta * (tmp[i] - mean); 
+      M2 += delta * (tmp[i] - mean);
       sum += tmp[i];
     }
 
   free(tmp);
-  
+
   return (sqrt(M2 / (n - 1))) / (sum / n);
 }
 
-/** 
+/**
  * "inteligent" truncated rel_st_dev
  */
 double
@@ -653,8 +654,8 @@ bi_int_rel_stdev(struct block_info_t* block_info)
   return bi_trunc_rel_stdev(block_info, 0.25);
 }
 
-/** 
- * set that an error occured while reading the block
+/**
+ * set that an error occurred while reading the block
  */
 void
 bi_add_error(struct block_info_t* block_info)
@@ -662,8 +663,8 @@ bi_add_error(struct block_info_t* block_info)
   block_info->error++;
 }
 
-/** 
- * get number of errors that occured while reading the block
+/**
+ * get number of errors that occurred while reading the block
  */
 int
 bi_get_error(struct block_info_t* block_info)
