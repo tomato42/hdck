@@ -1064,6 +1064,8 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
 
           st->tot_errors++;
 
+          // make sure the error is saved and reported later
+          bi_make_valid(&block_info[no_blocks]);
           bi_add_error(&block_info[no_blocks]);
           bad_sectors = 1;
 
@@ -2263,6 +2265,8 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
               diff_time(&res, time1, time2);
               nread = 1; // don't exit loop
               write(2, "E", 1);
+              // make sure the error is saved and reported later
+              bi_make_valid(&block_info[blocks]);
               bi_add_error(&block_info[blocks]);
 
               st->tot_errors++;
