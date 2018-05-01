@@ -359,6 +359,25 @@ _block_compare(const void *a, const void *b)
   x = &_block_compare_block_info[off_a];
   y = &_block_compare_block_info[off_b];
 
+  // first check if the block has any data
+  if (!bi_is_initialised(x) && !bi_is_initialised(y))
+    return 0;
+  else if (!bi_is_initialised(x) && bi_is_initialised(y))
+    return -1;
+  else if (bi_is_initialised(x) && !bi_is_initialised(y))
+    return 1;
+
+  // secondly check if there were no read errors for the blocks
+  // as this makes them the worst automatically
+  if (bi_get_error(x) > bi_get_error(y))
+    return 1;
+  else if (bi_get_error(x) < bi_get_error(y))
+    return -1;
+  else if (bi_get_error(x) != 0)
+    return 0;
+
+  // then check if they have valid values
+  // finally, compare the times
   double dec_x, dec_y;
 
   dec_x = bi_quantile(x, 9, 10);
@@ -466,6 +485,8 @@ update_block_stats(struct status_t *st, struct block_info_t *block_info)
   st->errors=0;
   for (size_t i=0; i< st->number_of_blocks; i++)
     {
+      st->errors += bi_get_error(&block_info[i]);
+
       if (!bi_is_initialised(&block_info[i]))
         {
           break;
@@ -480,8 +501,6 @@ update_block_stats(struct status_t *st, struct block_info_t *block_info)
       double avg;
 
       avg = bi_quantile(&block_info[i],9,10);
-
-      st->errors += bi_get_error(&block_info[i]);
 
       if (avg < st->vvfast_lvl) // very very fast read
         {
@@ -1622,8 +1641,11 @@ find_worst_blocks(struct status_t *st, struct block_info_t *block_info,
 
   for (size_t block_no = number; block_no < block_info_len; block_no++)
     {
-      if (bi_quantile(&block_info[block_list[0].off],9,10) <
-          bi_quantile(&block_info[block_no],9,10))
+      if ((bi_get_error(&block_info[block_no]) != 0 &&
+            bi_get_error(&block_info[block_list[0].off]) <
+            bi_get_error(&block_info[block_no])) ||
+            (bi_quantile(&block_info[block_list[0].off],9,10) <
+            bi_quantile(&block_info[block_no],9,10)))
           {
             block_list[0].off = block_no;
             sort_worst_block_list(st, block_info, block_info_len,
@@ -2266,6 +2288,7 @@ read_whole_disk(struct status_t *st, int dev_fd, struct block_info_t* block_info
               bi_add_error(&block_info[blocks]);
 
               st->tot_errors++;
+              st->errors++;
 
               if (st->bad_sector_warning)
                 {
@@ -3158,7 +3181,8 @@ main(int argc, char **argv)
 
               if (st.verbosity >= 0)
                 printf("block %zi (LBA: %lli-%lli) rel std dev: %5.2f"
-                  ", avg: %5.2f, valid: %s, samples: %zi, 9th decile: "
+                  ", avg: %5.2f, valid: %s, samples: %zi, errors: %i, "
+                  "9th decile: "
                   "%5.2f%s\n",
                   i,
                   ((off_t)i)*(long long)st.sectors,
@@ -3167,13 +3191,15 @@ main(int argc, char **argv)
                   bi_average(&block_info[i]),
                   (bi_is_valid(&block_info[i]))?"yes":"no",
                   bi_num_samples(&block_info[i]),
+                  bi_get_error(&block_info[i]),
                   bi_quantile(&block_info[i],9,10),
                   CLEAR_LINE_END);
 
               if (st.flog != NULL)
                 fprintf(st.flog, "block %zi (LBA: %lli-%lli) "
                   "rel std dev: %5.2f"
-                  ", avg: %5.2f, valid: %s, samples: %zi, 9th decile: %5.2f\n",
+                  ", avg: %5.2f, valid: %s, samples: %zi, errors: %i, "
+                  "9th decile: %5.2f\n",
                   i,
                   ((off_t)i)*(long long)st.sectors,
                   ((off_t)i+1)*(long long)st.sectors-1,
@@ -3181,6 +3207,7 @@ main(int argc, char **argv)
                   bi_average(&block_info[i]),
                   (bi_is_valid(&block_info[i]))?"yes":"no",
                   bi_num_samples(&block_info[i]),
+                  bi_get_error(&block_info[i]),
                   bi_quantile(&block_info[i],9,10));
             }
           block_number++;
@@ -3341,6 +3368,24 @@ main(int argc, char **argv)
 
       for(size_t i= start; i< end; i++)
         {
+
+          if (bi_get_error(&block_info[i]))
+            {
+                printf("%12zi %7s %6s %7s %7s %7s  %s %3zi %9s%s\n",
+                    i,
+                    "ERR",
+                    "ERR",
+                    "ERR",
+                    "ERR",
+                    "ERR",
+                    (bi_is_valid(&block_info[i]))?"yes":"no",
+                    bi_num_samples(&block_info[i]) +
+                        bi_get_error(&block_info[i]),
+                    "ERR",
+                    CLEAR_LINE_END);
+                continue;
+            }
+
           double stdev = bi_int_rel_stdev(&block_info[i]);
           stdev = bi_stdev(&block_info[i]);
 

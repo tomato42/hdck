@@ -660,6 +660,11 @@ bi_int_rel_stdev(struct block_info_t* block_info)
 void
 bi_add_error(struct block_info_t* block_info)
 {
+  if (!bi_is_initialised(block_info))
+    {
+        bi_init(block_info);
+        block_info->initialized = 1;
+    }
   block_info->error++;
 }
 
