@@ -219,7 +219,7 @@ usage(struct status_t *st)
                                                         " sectors (in µs)\n");
   printf("--min-reads NUM     minimal number of valid reads for a sector\n");
   printf("--max-reads NUM     maximal number of re-reads for a sector\n");
-  printf("--max-std-deviation NUM minimal relative stdandard deviation for "
+  printf("--max-std-deviation NUM minimal relative standard deviation for "
       "a sector to be\n");
   printf("                    considered valid (ignored)\n");
   printf("--max-sectors NUM   read at most NUM sectors\n");
