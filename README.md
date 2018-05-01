@@ -35,21 +35,21 @@ similar to the one below:
 hdck status:
 ============
 Loop:          1 of 1
-Progress:      2.87%, 2.87% total
-Read:          56064000 sectors of 1000204795904
-Speed:         121.408MiB/s, average: 94.588MiB/s
-Elapsed time:  00:04:49
-Expected time: 02:47:50
-         Samples:             Blocks:
-< 2.1ms:               190880               190788
-< 4.2ms:                26886                26877
-< 8.3ms:                   13                   13
-<16.7ms:                  661                  642
-<33.3ms:                  130                  113
-<50.0ms:                  201                   28
->50.0ms:                   26                  175
+Progress:      1.83%, 1.83% total
+Read:          768000 sectors of 21474836480
+Speed:         185.433MiB/s, average: 172.749MiB/s
+Elapsed time:  00:00:02
+Expected time: 00:01:49
+         Samples:             Blocks (9th decile):
+< 2.4ms:                 2961                 2961
+< 5.8ms:                    7                    7
+<14.1ms:                   19                   19
+<22.5ms:                    7                    7
+<39.1ms:                    3                    3
+<55.8ms:                    2                    2
+>55.8ms:                    1                    1
 ERR    :                    0                    0
-Intrrpt:                  203                  364
+Intrrpt:                    0                    0
 ```
 
 (meaning of particular fields is explained below)
@@ -57,55 +57,79 @@ Intrrpt:                  203                  364
 At the end it will print summary similar to this:
 
 ```
-results:
+hdck results:
+=============
 possible latent bad sectors or silent realocations:
-block 152604 (LBA: 39066624-39066879) rel std dev: 0.092528082, average: 249.413991, valid: yes, samples: 2
-block 152605 (LBA: 39066880-39067135) rel std dev: 0.663862467, average: 20.201437, valid: yes, samples: 6
-block 365753 (LBA: 93632768-93633023) rel std dev: 0.000327480, average: 18.547844, valid: yes, samples: 2
-block 499546 (LBA: 127883776-127884031) rel std dev: 0.667183390, average: 17.377143, valid: yes, samples: 2
-block 525720 (LBA: 134584320-134584575) rel std dev: 0.550697986, average: 23.005352, valid: yes, samples: 3
-block 1558769 (LBA: 399044864-399045119) rel std dev: 0.668017125, average: 17.565852, valid: yes, samples: 2
-block 3375615 (LBA: 864157440-864157695) rel std dev: 0.000375852, average: 16.047311, valid: yes, samples: 5
-block 3843711 (LBA: 983990016-983990271) rel std dev: 0.746113563, average: 23.568186, valid: yes, samples: 2
-block 4482182 (LBA: 1147438592-1147438847) rel std dev: 0.000182737, average: 34.318936, valid: yes, samples: 2
-block 5190989 (LBA: 1328893184-1328893439) rel std dev: 0.661462207, average: 17.735146, valid: yes, samples: 2
-block 5308850 (LBA: 1359065600-1359065855) rel std dev: 2.027333942, average: 10.417865, valid: yes, samples: 8
-block 5530828 (LBA: 1415891968-1415892223) rel std dev: 0.659776245, average: 17.776946, valid: yes, samples: 2
-block 5953060 (LBA: 1523983360-1523983615) rel std dev: 0.000690584, average: 16.329662, valid: yes, samples: 5
-block 6404576 (LBA: 1639571456-1639571711) rel std dev: 0.739413966, average: 23.795692, valid: yes, samples: 2
-block 7540426 (LBA: 1930349056-1930349311) rel std dev: 0.702445124, average: 16.701053, valid: yes, samples: 2
-15 uncertain blocks found
+block 0 (LBA: 0-255) rel std dev:  -nan, avg:  2.50, valid: yes, samples: 1, errors: 0, 9th decile:  2.50
+block 1 (LBA: 256-511) rel std dev:  -nan, avg:  2.55, valid: yes, samples: 1, errors: 0, 9th decile:  2.55
+block 2616 (LBA: 669696-669951) rel std dev:  0.00, avg: 37.37, valid: yes, samples: 15, errors: 0, 9th decile: 37.42
+block 2643 (LBA: 676608-676863) rel std dev:  0.00, avg: 35.90, valid: yes, samples: 15, errors: 0, 9th decile: 35.93
+block 2657 (LBA: 680192-680447) rel std dev:  0.00, avg: 35.89, valid: yes, samples: 15, errors: 0, 9th decile: 35.94
+block 15177 (LBA: 3885312-3885567) rel std dev:  0.90, avg: 11.39, valid: yes, samples: 20, errors: 0, 9th decile: 22.66
+block 33574 (LBA: 8594944-8595199) rel std dev:  0.59, avg: 14.31, valid: yes, samples: 15, errors: 0, 9th decile: 29.31
+block 33862 (LBA: 8668672-8668927) rel std dev:  0.87, avg:  7.92, valid: yes, samples: 14, errors: 0, 9th decile: 19.20
+block 33981 (LBA: 8699136-8699391) rel std dev:  0.01, avg:  6.43, valid: yes, samples: 14, errors: 0, 9th decile: 15.74
+block 34139 (LBA: 8739584-8739839) rel std dev:  0.81, avg: 20.48, valid: yes, samples: 20, errors: 0, 9th decile: 45.94
+block 34166 (LBA: 8746496-8746751) rel std dev:  0.82, avg:  7.81, valid: yes, samples: 19, errors: 0, 9th decile: 20.96
+block 34192 (LBA: 8753152-8753407) rel std dev:  0.85, avg: 11.33, valid: yes, samples: 19, errors: 0, 9th decile: 22.67
+block 34368 (LBA: 8798208-8798463) rel std dev:  0.67, avg: 22.02, valid: yes, samples: 24, errors: 0, 9th decile: 55.14
+block 34814 (LBA: 8912384-8912639) rel std dev:  0.79, avg: 10.29, valid: yes, samples: 24, errors: 0, 9th decile: 26.55
+block 34837 (LBA: 8918272-8918527) rel std dev:  0.67, avg: 18.53, valid: yes, samples: 24, errors: 0, 9th decile: 37.66
+block 34891 (LBA: 8932096-8932351) rel std dev:  0.50, avg: 42.55, valid: yes, samples: 30, errors: 0, 9th decile: 62.59
+block 37690 (LBA: 9648640-9648895) rel std dev:  0.89, avg: 11.96, valid: yes, samples: 20, errors: 0, 9th decile: 22.42
+block 37987 (LBA: 9724672-9724927) rel std dev:  0.53, avg: 23.39, valid: yes, samples: 20, errors: 0, 9th decile: 45.02
+block 39149 (LBA: 10022144-10022399) rel std dev:  0.25, avg: 30.48, valid: yes, samples: 20, errors: 0, 9th decile: 45.06
+block 41191 (LBA: 10544896-10545151) rel std dev:  0.30, avg: 143.75, valid: yes, samples: 30, errors: 0, 9th decile: 229.82
+block 43859 (LBA: 11227904-11228159) rel std dev:  0.55, avg: 27.37, valid: yes, samples: 30, errors: 0, 9th decile: 63.21
+block 45148 (LBA: 11557888-11558143) rel std dev:  0.26, avg: 100.32, valid: yes, samples: 30, errors: 0, 9th decile: 145.01
+block 47789 (LBA: 12233984-12234239) rel std dev:  0.67, avg: 22.79, valid: yes, samples: 20, errors: 0, 9th decile: 40.72
+block 74821 (LBA: 19154176-19154431) rel std dev:  0.24, avg: 71.71, valid: yes, samples: 30, errors: 0, 9th decile: 120.03
+block 80023 (LBA: 20485888-20486143) rel std dev:  0.72, avg: 33.94, valid: yes, samples: 30, errors: 0, 9th decile: 85.84
+block 81849 (LBA: 20953344-20953599) rel std dev:  0.53, avg: 15.89, valid: yes, samples: 15, errors: 0, 9th decile: 32.56
+block 90502 (LBA: 23168512-23168767) rel std dev:  0.48, avg: 48.78, valid: yes, samples: 30, errors: 0, 9th decile: 89.06
+block 91273 (LBA: 23365888-23366143) rel std dev:  0.86, avg: 10.55, valid: yes, samples: 20, errors: 0, 9th decile: 20.99
+block 91507 (LBA: 23425792-23426047) rel std dev:  0.43, avg: 28.06, valid: yes, samples: 20, errors: 0, 9th decile: 46.87
+block 96648 (LBA: 24741888-24742143) rel std dev:  0.53, avg: 22.24, valid: yes, samples: 20, errors: 0, 9th decile: 38.52
+block 98009 (LBA: 25090304-25090559) rel std dev:  0.38, avg: 68.93, valid: yes, samples: 30, errors: 0, 9th decile: 112.58
+block 98190 (LBA: 25136640-25136895) rel std dev:  0.32, avg: 63.20, valid: yes, samples: 30, errors: 0, 9th decile: 105.19
+block 104310 (LBA: 26703360-26703615) rel std dev:  0.42, avg: 47.65, valid: yes, samples: 30, errors: 0, 9th decile: 89.85
+block 191916 (LBA: 49130496-49130751) rel std dev:  0.40, avg: 19.45, valid: yes, samples: 20, errors: 0, 9th decile: 37.76
+block 273929 (LBA: 70125824-70126079) rel std dev:  0.45, avg: 35.09, valid: yes, samples: 30, errors: 0, 9th decile: 65.39
+block 301249 (LBA: 77119744-77119999) rel std dev:  0.84, avg: 24.71, valid: yes, samples: 21, errors: 0, 9th decile: 54.10
+block 301250 (LBA: 77120000-77120255) rel std dev:  0.40, avg: 10.40, valid: yes, samples: 20, errors: 0, 9th decile: 14.17
+block 301272 (LBA: 77125632-77125887) rel std dev:  0.91, avg: 17.24, valid: yes, samples: 20, errors: 0, 9th decile: 39.82
+block 304234 (LBA: 77883904-77884159) rel std dev:  0.00, avg: 37.69, valid: yes, samples: 15, errors: 0, 9th decile: 37.71
+39 uncertain blocks found
 
-wall time: 15182s.452ms.368µs.313ns
-sum time: 11930s.717ms.78µs
-tested 7630957 blocks (0 errors, 8411636 samples)
-mean block time: 0s.1ms.409µs
-std dev: 0.758969303(ms)
+wall time: 3481s.825ms.341µs.155ns
+sum time: 3435s.169ms.124µs
+tested 305333 blocks (0 errors, 964536 samples)
+mean block time: 0s.3ms.555µs
+std dev: 1.058807835(ms)
 Number of invalid blocks because of detected interrupted reads: 0
-Number of interrupted reads: 2296
+Number of interrupted reads: 29
 Individual block statistics:
-<2.08ms: 6569056
-<4.17ms: 1048557
-<8.33ms: 1793
-<16.67ms: 11539
-<33.33ms: 10
-<50.00ms: 1
->50.00ms: 1
+<2.44ms: 0
+<5.79ms: 299889
+<14.12ms: 5383
+<22.46ms: 30
+<39.12ms: 12
+<55.79ms: 8
+>55.79ms: 11
 ERR: 0
 
 Worst blocks:
-block no      st.dev  avg   tr. avg max     min    valid  samples
-     1558769 11.7343  17.57   17.57   25.86    9.27  yes   2
-     5190989 11.7311  17.74   17.74   26.03    9.44  yes   2
-     5530828 11.7288  17.78   17.78   26.07    9.48  yes   2
-      365753  0.0061  18.55   18.55   18.55   18.54  yes   2
-      152605 15.5012  20.20   21.63   34.07    0.64  yes   6
-      525720 12.6690  23.01   23.01   34.07    9.18  yes   3
-     3843711 17.5845  23.57   23.57   36.00   11.13  yes   2
-     6404576 17.5949  23.80   23.80   36.24   11.35  yes   2
-     4482182  0.0063  34.32   34.32   34.32   34.31  yes   2
-      152604 23.0778 249.41  249.41  265.73  233.10  yes   2
-
+block no      st.dev  avg   1stQ    med     3rdQ   valid samples 9th decile
+       43859 20.5902  27.37   12.37   20.66   35.28  yes  30     63.21
+      273929 22.9114  35.09   13.70   38.67   47.01  yes  30     65.39
+       80023 30.7677  33.94   10.89   23.40   50.46  yes  30     85.84
+       90502 30.5331  48.78   20.73   41.54   70.73  yes  30     89.06
+      104310 33.9484  47.65   29.02   37.38   54.06  yes  30     89.85
+       98190 37.7779  63.20   39.70   58.49   85.47  yes  30    105.19
+       98009 37.8684  68.93   35.89   77.53   94.24  yes  30    112.58
+       74821 35.9626  71.71   60.81   60.89   90.06  yes  30    120.03
+       45148 35.2132 100.32   77.49   85.93  127.55  yes  30    145.01
+       41191 61.4519 143.75   97.81  133.18  179.01  yes  30    229.82
 
 Disk status: CRITICAL
 CAUTION! Sectors that required more than 6 read attempts detected, drive may be ALREADY FAILING!
