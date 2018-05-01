@@ -1081,9 +1081,6 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
                     (off_t)512*st->sectors*(no_blocks+1 + offset),
                     SEEK_SET) < 0)
             goto interrupted;
-
-          no_blocks++;
-
         }
       else if (nread != st->sectors*512)
         {
@@ -1091,7 +1088,6 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
           if (lseek(fd, (off_t)512*st->sectors*(no_blocks+1 + offset),
                     SEEK_SET) < 0)
             goto interrupted;
-          no_blocks++;
         }
       else
         {
@@ -1102,8 +1098,8 @@ read_blocks(struct status_t *st, int fd, char* stat_path, off_t offset, off_t le
 
           bi_add_time(&block_info[no_blocks], time_double(res));
 
-          no_blocks++;
         }
+      no_blocks++;
     }
 
   // read additional two blocks to exclude the probability that there were
