@@ -169,10 +169,11 @@ Intrrpt:                  203                  364
 * `Blocks` - total number of blocks for which the calculated (or estimated)
   [ninth decile](https://en.wikipedia.org/wiki/Quantile) places them in a
   given category
-* `2.1ms`, `4.2ms`, etc. - the amount of time it took the hard drive to
+* `2.1ms`, `4.2ms`, etc. - the amount of time it at most took the hard drive to
   read the sector (the exact numbers depend on rotational speed of the
-  hard drive, the numbers are equal to rotational delay divided by 4, by 2,
-  multiplied by 1, 2, 4 and 6 respectively)
+  hard drive, the numbers are calculated for groupings of normal reads,
+  reads with cylinder change, 1 re-read, 2 re-reads, 4 re-reads, 6 re-reads
+  and more than 6 re-reads)
 * `ERR` - sectors for which an IO error was returned (the read failed
   completely)
 * `Intrrpt` - reads which were interrupted - when `hdck` detected that other

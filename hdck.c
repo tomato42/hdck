@@ -122,13 +122,13 @@ struct status_t {
      * run statistics
      */
     long long tot_errors; /**< total number of read errors encountered */
-    long long tot_vvfast; /**< total number of very very fast reads (<RD/4) */
-    long long tot_vfast;  /**< total number of very fast reads      (<RD/2) */
-    long long tot_fast;   /**< total number of fast reads           (<RD)   */
-    long long tot_normal; /**< total number of normal reads         (<RD*2) */
-    long long tot_slow;   /**< total number of slow reads           (<RD*4) */
-    long long tot_vslow;  /**< total number of very slow reads      (<RD*6) */
-    long long tot_vvslow; /**< total number of very very slow reads (>RD*6) */
+    long long tot_vvfast; /**< total number of very very fast reads */
+    long long tot_vfast;  /**< total number of very fast reads */
+    long long tot_fast;   /**< total number of fast reads */
+    long long tot_normal; /**< total number of normal reads */
+    long long tot_slow;   /**< total number of slow reads */
+    long long tot_vslow;  /**< total number of very slow reads */
+    long long tot_vvslow; /**< total number of very very slow reads */
     long double tot_sum;  /**< sum of all valid samples */
     long long tot_samples; /**< number of all samples taken */
     long long errors;     /**< number of blocks with read errors */
@@ -456,13 +456,13 @@ void
 update_block_stats(struct status_t *st, struct block_info_t *block_info)
 {
   st->invalid=0;
-  st->vvfast=0; /* less than one fourth the rotational delay */
-  st->vfast=0;  /* less than half the rotational delay */
-  st->fast=0;   /* less than rotational delay */
-  st->normal=0; /* less than 2 * rotational delay */
-  st->slow=0;   /* less than 4 * rotational delay */
-  st->vslow=0;  /* less than 6 * rotational delay */
-  st->vvslow=0; /* more than 6 * rotational delay */
+  st->vvfast=0;
+  st->vfast=0;
+  st->fast=0;
+  st->normal=0;
+  st->slow=0;
+  st->vslow=0;
+  st->vvslow=0;
   st->errors=0;
   for (size_t i=0; i< st->number_of_blocks; i++)
     {
@@ -2834,18 +2834,28 @@ main(int argc, char **argv)
         st.max_std_dev = 0.5;
     }
 
+  // typical read takes about a fifth of rotational delay
+  // (value arrived at experimentally, by reading blocks few thousand times)
+  double baseline = st.rotational_delay / 5.13;
+
   if (st.vvfast_lvl < 0.0)
-    st.vvfast_lvl = st.rotational_delay / 4;
+    st.vvfast_lvl = baseline * 1.5;
   if (st.vfast_lvl < 0.0)
-    st.vfast_lvl = st.rotational_delay / 2;
+    // sectors that include cylinder change take twice as long as the normal
+    // read, but definitely are not re-reads
+    st.vfast_lvl = baseline + st.rotational_delay / 2;
   if (st.fast_lvl < 0.0)
-    st.fast_lvl = st.rotational_delay;
+    // ones that needed one re-read
+    st.fast_lvl = baseline + st.rotational_delay * 1.5;
   if (st.normal_lvl < 0.0)
-    st.normal_lvl = st.rotational_delay * 2;
+    // at most two re-reads
+    st.normal_lvl = baseline + st.rotational_delay * 2.5;
   if (st.slow_lvl < 0.0)
-    st.slow_lvl = st.rotational_delay * 4;
+    // four at most
+    st.slow_lvl = baseline + st.rotational_delay * 4.5;
   if (st.vslow_lvl < 0.0)
-    st.vslow_lvl = st.rotational_delay * 6;
+    // six at most
+    st.vslow_lvl = baseline + st.rotational_delay * 6.5;
 
   if (log_path != NULL)
     {
