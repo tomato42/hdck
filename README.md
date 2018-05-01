@@ -28,7 +28,7 @@ hdck -f /dev/sda
 ```
 
 While the program is running (it can take from half an hour, to 12h or more,
-depending on HDD size and speed) it will print progress information in form
+depending on HDD's size and speed) it will print progress information in form
 similar to the one below:
 
 ```
@@ -52,7 +52,7 @@ ERR    :                    0                    0
 Intrrpt:                  203                  364
 ```
 
-(meaning of particular filelds is explained below)
+(meaning of particular fields is explained below)
 
 At the end it will print summary similar to this:
 
@@ -117,7 +117,7 @@ Disk status can range from:
 
 * **excellent** - self explanatory
 * **very good** - When all blocks were read below the rotational latency threshold
-* **good** - When there are very few blocks that read constant re-reads (because of bad block reallocations or ECC failures
+* **good** - When there are very few blocks that read constant re-reads (because of bad block reallocations or ECC failures)
 * **moderate** -  When there are many blocks that need constant re-reads
 * **bad** - When blocks that required more than 2 re-reads detected
 * **very bad** - when blocks that required more than 4 re-reads were detected
@@ -126,6 +126,14 @@ Disk status can range from:
 
 Basically any disk at very bad or worse requires administrator action (more on
 this later), lower levels can be considered as OK.
+
+Note: the very fact that HDDs are physical systems, makes this scan
+not fully deterministic, but if there were multiple sectors that required
+multiple re-reads from disk (time larger than 16.66ms for 7200 rpm disk)
+during _any_ one scan it means that the disk may be beginning to fail.
+See more in the
+[THEORY_OF_OPERATION.md](https://github.com/tomato42/hdck/blob/master/THEORY_OF_OPERATION.md)
+document.
 
 # Nomenclature
 
@@ -244,7 +252,7 @@ Things to avoid:
 * Testing SSDs is supported but possibly meaningless, the only thing this
   application will detect correctly are hard read errors, and if SSD is in
   such state it's long gone. (people willing to collect statistics of
-  well-used SSDs welcome)
+  well-used SSDs welcome - see [#2](https://github.com/tomato42/hdck/issues/2))
 
 If the `Interrpt` row grows rapidly, it means that either something is wrong,
 usually some background process keeps writing and flushing data, use iotop to
