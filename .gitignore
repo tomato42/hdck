@@ -1,3 +1,4 @@
 hdck
+*.a
 *.o
 tags

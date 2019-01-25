@@ -4,16 +4,16 @@ LFLAGS  := -lrt -lm `getconf LFS_LDFLAGS`
 
 default: hdck
 
-hdck: block_info.o hdck.c sg-verify/sg_cmds_extra.o
-	$(GCC) $(CFLAGS) -Isg-verify -Lsg-verify -o hdck hdck.c block_info.o sg-verify/*.o $(LFLAGS) 
+hdck: src/block_info.o src/hdck.c src/sg-verify/libsgverify.a
+	$(GCC) $(CFLAGS) -Isrc/sg-verify $^ -o $@ $(LFLAGS)
 
-block_info.o: block_info.c block_info.h
-	$(GCC) -c $(CFLAGS)  block_info.c -o block_info.o
+src/block_info.o: src/block_info.c
+	$(GCC) -c $(CFLAGS)  $^ -o $@
 
-sg-verify/sg_cmds_extra.o:
-	cd sg-verify && make
+src/sg-verify/libsgverify.a:
+	cd src/sg-verify && make
 
 clean:
-	rm -f block_info.o hdck
-	cd sg-verify && make clean
+	rm -f src/block_info.o hdck
+	cd src/sg-verify && make clean
 
