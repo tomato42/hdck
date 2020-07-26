@@ -1,5 +1,5 @@
 GCC	:= gcc
-CFLAGS  := -O2 -ggdb -Wall -std=c99 `getconf LFS_CFLAGS`
+CFLAGS  := -O2 -ggdb -Wall -Wno-unused-result -std=c99 `getconf LFS_CFLAGS`
 LFLAGS  := -lrt -lm `getconf LFS_LDFLAGS`
 
 default: hdck

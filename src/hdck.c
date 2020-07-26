@@ -1435,11 +1435,9 @@ find_bad_blocks(struct status_t *st, struct block_info_t* block_info,
 
               if (num_samples < 20)
                 {
-                  double high,med;
+                  double high;
                   high = bi_quantile_exact(
                       &block_info[block_no],num_samples-1,num_samples);
-                  med = bi_quantile_exact(
-                      &block_info[block_no],num_samples-2,num_samples);
 
                   if ((max - high) < st->fast_lvl/8)
                   // if two slowest are very similar
@@ -1804,7 +1802,6 @@ read_block_list(struct status_t *st, int dev_fd,
   struct timespec start_time, end_time, res; ///< expected time calculation
   size_t block_number=0; ///< position in the block_list
   struct block_info_t* block_data; ///< stats for sectors read
-  int int_res;
   unsigned int info;
 
   if (st->verbosity > 6)
@@ -1828,7 +1825,7 @@ read_block_list(struct status_t *st, int dev_fd,
     {
       if(st->ata_verify)
         {
-          int_res = sg_ll_verify10(dev_fd, 0, 0, 0,
+          sg_ll_verify10(dev_fd, 0, 0, 0,
               (unsigned int)0, st->sectors*disk_cache*2, NULL, 0, &info, 1,
               st->verbosity);
           // XXX ignore errors
@@ -1848,8 +1845,7 @@ read_block_list(struct status_t *st, int dev_fd,
           buffer = ptr_align(buffer, pagesize);
           for (size_t i=0; i < disk_cache*2; i++)
             {
-              int nread;
-              nread = read(dev_fd, buffer, st->sectors*512);
+              read(dev_fd, buffer, st->sectors*512);
               //XXX ignore errors
             }
           free(buffer_free);
